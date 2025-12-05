@@ -1,0 +1,85 @@
+spring:
+  application:
+    name: ai-tutor-backend
+  
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/ai_tutor}
+    username: ${DATABASE_USERNAME:root}
+    password: ${DATABASE_PASSWORD:root}
+    driver-class-name: org.postgresql.Driver
+  
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+  
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 10MB
+  
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+server:
+  port: 8080
+
+# JWT Configuration
+jwt:
+  secret: ${JWT_SECRET:your-super-secret-jwt-key-change-this-in-production-min-256-bits}
+  expiration: 86400000 # 24 hours in milliseconds
+
+# OpenAI Configuration
+openai:
+  api-key: ${OPENAI_API_KEY:}
+  # Модель GPT (варианты: gpt-4-turbo-preview, gpt-4, gpt-3.5-turbo, gpt-4o, gpt-4o-mini)
+  # gpt-3.5-turbo - быстрая и дешевая модель для коротких ответов
+  model: ${OPENAI_MODEL:gpt-3.5-turbo}
+  # Максимальная длина ответа в токенах (1 токен ≈ 0.75 слова)
+  # Короткие ответы для быстрого диалога
+  max-tokens: ${OPENAI_MAX_TOKENS:500}
+  # Температура (0.0 - 2.0)
+  # 0.5 = баланс скорости и качества для коротких ответов
+  temperature: ${OPENAI_TEMPERATURE:0.5}
+  # Top-p (nucleus sampling) (0.0 - 1.0)
+  # Альтернатива temperature, контролирует разнообразие
+  # 0.9 = использует 90% вероятностной массы токенов
+  top-p: ${OPENAI_TOP_P:1.0}
+  # Frequency penalty (-2.0 - 2.0)
+  # Штраф за повторение токенов (положительное значение уменьшает повторения)
+  frequency-penalty: ${OPENAI_FREQUENCY_PENALTY:0.0}
+  # Presence penalty (-2.0 - 2.0)
+  # Штраф за упоминание новых тем (положительное значение поощряет новые темы)
+  presence-penalty: ${OPENAI_PRESENCE_PENALTY:0.0}
+  # Streaming (true/false)
+  # Включить потоковую передачу ответов (для real-time чата)
+  streaming: ${OPENAI_STREAMING:true}
+  # Timeout для запросов (в секундах)
+  # GPT-3.5 быстрее, можно уменьшить timeout
+  timeout: ${OPENAI_TIMEOUT:30}
+  # Retry settings
+  max-retries: ${OPENAI_MAX_RETRIES:3}
+  # System message для всех запросов (опционально)
+  system-message-override: ${OPENAI_SYSTEM_MESSAGE:}
+
+# Yandex SpeechKit Configuration
+yandex:
+  speechkit:
+    # API ключ или IAM токен для Yandex Cloud
+    # Получить: https://cloud.yandex.ru/docs/iam/operations/iam-token/create
+    api-key: ${YANDEX_SPEECHKIT_API_KEY:}
+    # Folder ID (опционально, если используете API ключ)
+    folder-id: ${YANDEX_FOLDER_ID:}
+
+# CORS Configuration
+cors:
+  allowed-origins: ${CORS_ORIGINS:http://localhost:5173,http://localhost:3000,http://localhost:3001}
+

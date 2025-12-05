@@ -1,0 +1,60 @@
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+target/
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+### Environment ###
+.env
+.env.local
+.env.*.local
+
+### Logs ###
+*.log
+logs/
+
+### Database ###
+*.db
+*.sqlite
+
+### Node.js / Frontend ###
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+.cache/
+.parcel-cache/
+.vite/
+
+### Frontend build outputs ###
+AI Tutor Dashboard/dist/
+AI Tutor Dashboard/build/
+AI Tutor Dashboard/.vite/
+AI Tutor Dashboard/node_modules/
