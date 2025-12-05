@@ -33,6 +33,12 @@ target/
 .env.local
 .env.*.local
 
+### Local Configuration Files (may contain secrets) ###
+application-local.yml
+application-local.yaml
+*local.yml
+*local.yaml
+
 ### Logs ###
 *.log
 logs/
