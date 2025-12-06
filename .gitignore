@@ -31,36 +31,10 @@ target/
 ### Environment ###
 .env
 .env.local
-.env.*.local
-
-### Local Configuration Files (may contain secrets) ###
-application-local.yml
-application-local.yaml
-*local.yml
-*local.yaml
 
 ### Logs ###
 *.log
-logs/
 
 ### Database ###
 *.db
 *.sqlite
-
-### Node.js / Frontend ###
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-dist/
-build/
-.cache/
-.parcel-cache/
-.vite/
-
-### Frontend build outputs ###
-AI Tutor Dashboard/dist/
-AI Tutor Dashboard/build/
-AI Tutor Dashboard/.vite/
-AI Tutor Dashboard/node_modules/

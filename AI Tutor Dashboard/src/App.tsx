@@ -227,7 +227,7 @@ export default function App() {
 
   return <div className="min-h-screen">
     {/* Show Header when user is logged in and not on landing or login screens */}
-    {user && (currentView === 'dashboard' || currentView === 'session') && (
+    {user && currentView !== 'landing' && currentView !== 'login-organizer' && currentView !== 'login-student' && (
       <Header user={user} onLogout={handleLogout} />
     )}
     {renderView()}

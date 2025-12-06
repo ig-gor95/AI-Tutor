@@ -89,45 +89,6 @@ class ChatController(
         }
     }
     
-    @PostMapping("/greeting/{resultId}")
-    fun generateGreeting(@PathVariable resultId: String): ResponseEntity<ChatMessageResponse> {
-        try {
-            // Get session result
-            val result = sessionResultService.getResultById(resultId)
-            
-            // Get session
-            val session = sessionService.getSessionById(result.sessionId)
-            
-            // Generate system prompt
-            val systemPrompt = openAIService.generateSystemPrompt(session)
-            
-            // Generate greeting through AI (empty conversation history for first message)
-            val greeting = openAIService.generateGreetingMessage(systemPrompt)
-            
-            // Save AI greeting to transcript
-            sessionResultService.addMessage(
-                resultId,
-                TranscriptMessageDTO(
-                    role = MessageRole.AI,
-                    message = greeting,
-                    timestamp = LocalDateTime.now()
-                )
-            )
-            
-            return ResponseEntity.ok(
-                ChatMessageResponse(
-                    message = greeting,
-                    role = MessageRole.AI,
-                    timestamp = LocalDateTime.now()
-                )
-            )
-        } catch (e: Exception) {
-            println("Generate greeting error: ${e.message}")
-            e.printStackTrace()
-            return ResponseEntity.badRequest().build()
-        }
-    }
-    
     @PostMapping("/complete/{resultId}")
     fun completeSession(@PathVariable resultId: String): ResponseEntity<Map<String, Any>> {
         try {

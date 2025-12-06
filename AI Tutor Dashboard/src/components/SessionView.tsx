@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Session, SessionResult, User } from '@/types';
 import { AIAvatar } from './AIAvatar';
 import { Mic, MicOff, Volume2, VolumeX, Clock, Target, Info, ArrowLeft, Send, Loader2, MessageSquare } from 'lucide-react';
-import { startSessionResult, sendChatMessage, completeSession, generateGreeting } from '@/lib/chatApi';
+import { startSessionResult, sendChatMessage, completeSession } from '@/lib/chatApi';
 import { TextToSpeechAdvanced, TTSProvider } from '@/lib/textToSpeechAdvanced';
 import { SpeechToText } from '@/lib/speechToText';
 
@@ -83,41 +83,21 @@ export function SessionView({ session, user, onComplete, onBack }: Props) {
       setShowInfo(false);
       setShowChat(true);
       
-      // Get AI greeting from backend (generated through AI)
-      try {
-        const greetingResponse = await generateGreeting(result.id!);
-        const greeting = greetingResponse.message;
-        addMessage('ai', greeting);
-        
-        // Speak greeting
-        if (!isMuted) {
+      // Get AI greeting
+      const greeting = generateGreeting();
+      addMessage('ai', greeting);
+      
+      // Speak greeting
+      if (!isMuted) {
+        setIsSpeaking(true);
+        ttsRef.current?.speak(greeting, () => {
+          setIsSpeaking(false);
+        }, () => {
           setIsSpeaking(true);
-          ttsRef.current?.speak(greeting, () => {
-            setIsSpeaking(false);
-          }, () => {
-            setIsSpeaking(true);
-          }).catch((error) => {
-            console.error('TTS error:', error);
-            setIsSpeaking(false);
-          });
-        }
-      } catch (error) {
-        console.error('Failed to generate greeting:', error);
-        // Fallback to static greeting
-        const fallbackGreeting = generateGreetingStatic();
-        addMessage('ai', fallbackGreeting);
-        
-        if (!isMuted) {
-          setIsSpeaking(true);
-          ttsRef.current?.speak(fallbackGreeting, () => {
-            setIsSpeaking(false);
-          }, () => {
-            setIsSpeaking(true);
-          }).catch((error) => {
-            console.error('TTS error:', error);
-            setIsSpeaking(false);
-          });
-        }
+        }).catch((error) => {
+          console.error('TTS error:', error);
+          setIsSpeaking(false);
+        });
       }
       
       setIsProcessing(false);
@@ -129,13 +109,12 @@ export function SessionView({ session, user, onComplete, onBack }: Props) {
     }
   };
 
-  // Fallback static greeting (used if AI generation fails)
-  const generateGreetingStatic = () => {
+  const generateGreeting = () => {
     const { params } = session;
     const greetings = {
-      friendly: `Привет! Я твой AI-тьютор. Сегодня мы изучим "${params.topic}". Давай начнем с основ!`,
-      professional: `Здравствуйте. Я готова провести занятие по теме "${params.topic}". Начнем с ключевых концепций.`,
-      motivating: `Отлично! Сегодня мы освоим "${params.topic}". Уверена, у тебя всё получится! Начинаем прямо сейчас!`
+      friendly: `Привет! Я твой AI-тьютор. Рад помочь тебе изучить "${params.topic}". Готов начать?`,
+      professional: `Здравствуйте. Я готов провести занятие по теме "${params.topic}". Приступим к обучению.`,
+      motivating: `Отлично! Сегодня мы освоим "${params.topic}". Уверен, у тебя всё получится! Поехали!`
     };
     return greetings[params.personality];
   };
@@ -269,15 +248,13 @@ export function SessionView({ session, user, onComplete, onBack }: Props) {
       <div className="bg-white border-b border-gray-200 px-4 py-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-4">
-            {onBack && (
-              <button
-                onClick={onBack}
-                className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Вернуться в кабинет"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-            )}
+            <button
+              onClick={onBack || (() => window.history.back())}
+              className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+              title="Вернуться назад"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
             <div>
               <h2 className="text-gray-900">{session.params.topic}</h2>
               <p className="text-sm text-gray-600">с {session.organizerName}</p>

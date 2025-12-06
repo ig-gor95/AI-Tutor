@@ -30,16 +30,6 @@ export async function startSessionResult(
   }
 }
 
-export async function generateGreeting(resultId: string): Promise<ChatMessageResponse> {
-  try {
-    const response = await api.post<ChatMessageResponse>(`/chat/greeting/${resultId}`);
-    return response.data;
-  } catch (error: any) {
-    console.error('Generate greeting error:', error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || 'Ошибка генерации приветствия');
-  }
-}
-
 export async function sendChatMessage(data: ChatMessageRequest): Promise<ChatMessageResponse> {
   try {
     const response = await api.post<ChatMessageResponse>('/chat/message', data);
