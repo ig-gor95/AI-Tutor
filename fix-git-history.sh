@@ -5,7 +5,7 @@ echo "🔧 Fixing git history to remove API keys..."
 
 # Step 1: Ensure working directory is clean and files are fixed
 echo "Step 1: Checking current files..."
-if grep -q "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" src/main/resources/application.yml 2>/dev/null; then
+if grep -q "sk-proj-" src/main/resources/application.yml 2>/dev/null; then
   echo "❌ Keys still in application.yml! Fixing..."
   sed -i '' 's|api-key: ${OPENAI_API_KEY:.*}|api-key: ${OPENAI_API_KEY:}|g' src/main/resources/application.yml
   sed -i '' 's|api-key: ${YANDEX_SPEECHKIT_API_KEY:.*}|api-key: ${YANDEX_SPEECHKIT_API_KEY:}|g' src/main/resources/application.yml

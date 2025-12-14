@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Plus, Link as LinkIcon, Calendar, Clock, Target, Copy, Check, BarChart3, Users, MessageSquare, Video, BookOpen, Brain, ListChecks, FileText, ChevronDown, ChevronUp, Sparkles, Wand2, X } from 'lucide-react';
+import { Plus, Link as LinkIcon, Calendar, Clock, Target, Copy, Check, BarChart3, Users, MessageSquare, Video, BookOpen, Brain, ListChecks, FileText, ChevronDown, ChevronUp, Sparkles, Wand2, X, Mic } from 'lucide-react';
 import { Session, SessionParams, User } from '@/types';
 import { saveSession, getResultsByOrganizerId } from '@/lib/mockData';
+import { DictationAnalysis } from './DictationAnalysis';
 
 interface Props {
   user: User;
@@ -12,16 +13,16 @@ interface Props {
 
 export function OrganizerDashboard({ user, sessions, onRefresh, onOpenSession }: Props) {
   // Получаем начальную вкладку из URL или используем 'manage' по умолчанию
-  const getInitialTab = (): 'manage' | 'sessions' | 'students' => {
+  const getInitialTab = (): 'manage' | 'sessions' | 'students' | 'dictation' => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    if (tab === 'manage' || tab === 'sessions' || tab === 'students') {
+    if (tab === 'manage' || tab === 'sessions' || tab === 'students' || tab === 'dictation') {
       return tab;
     }
     return 'manage';
   };
 
-  const [activeTab, setActiveTab] = useState<'manage' | 'sessions' | 'students'>(getInitialTab());
+  const [activeTab, setActiveTab] = useState<'manage' | 'sessions' | 'students' | 'dictation'>(getInitialTab());
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showCreateMenu, setShowCreateMenu] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -356,6 +357,18 @@ export function OrganizerDashboard({ user, sessions, onRefresh, onOpenSession }:
             <Users className="w-3 h-3 sm:w-4 sm:h-4" />
             <span>Статистика</span>
           </button>
+          <button
+            onClick={() => setActiveTab('dictation')}
+            className={`flex-1 sm:flex-none px-3 sm:px-6 py-2 sm:py-3 rounded-lg transition-all flex items-center justify-center gap-2 text-xs sm:text-sm whitespace-nowrap ${
+              activeTab === 'dictation'
+                ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-md'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+            }`}
+            title="Анализ дикции и произношения"
+          >
+            <Mic className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span>Анализ дикции</span>
+          </button>
         </div>
 
         {/* Header */}
@@ -366,6 +379,8 @@ export function OrganizerDashboard({ user, sessions, onRefresh, onOpenSession }:
                 ? 'Управление сессиями' 
                 : activeTab === 'sessions'
                 ? 'Мои разговоры с роботом'
+                : activeTab === 'dictation'
+                ? 'Анализ дикции'
                 : 'Статистика учеников'}
             </h2>
             <p className="text-sm sm:text-base text-gray-600">
@@ -373,6 +388,8 @@ export function OrganizerDashboard({ user, sessions, onRefresh, onOpenSession }:
                 ? 'Создавайте и управляйте учебными сессиями' 
                 : activeTab === 'sessions'
                 ? 'Протестируйте и пообщайтесь с AI-тьютором'
+                : activeTab === 'dictation'
+                ? 'Анализ фонетики, интонации и артикуляции речи'
                 : 'Детальная статистика по всем ученикам'}
             </p>
           </div>
@@ -850,7 +867,9 @@ export function OrganizerDashboard({ user, sessions, onRefresh, onOpenSession }:
 
         {/* Sessions List */}
         <div className="space-y-4">
-          {activeTab === 'manage' ? (
+          {activeTab === 'dictation' ? (
+            <DictationAnalysis onBack={() => setActiveTab('manage')} />
+          ) : activeTab === 'manage' ? (
             // Management Tab Content
             <>
               {userSessions.length === 0 ? (
