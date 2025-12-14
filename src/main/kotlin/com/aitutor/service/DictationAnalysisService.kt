@@ -17,13 +17,23 @@ private val logger = KotlinLogging.logger {}
 
 @Service
 class DictationAnalysisService(
-    private val phoneticAnalyzer: RussianPhoneticAnalyzer
+    private val phoneticAnalyzer: RussianPhoneticAnalyzer,
+    private val praatFormantService: PraatFormantService
 ) {
 
     /**
      * Основной метод анализа дикции
      */
     suspend fun analyzeDictation(request: DictationAnalysisRequest): DictationAnalysisResponse = withContext(Dispatchers.IO) {
+        // Проверяем доступность Praat-сервиса перед началом анализа
+        if (!praatFormantService.isServiceAvailable()) {
+            throw IllegalStateException(
+                "Praat phonetics service is not available at ${praatFormantService.serviceUrl}. " +
+                "Please ensure the Python phonetics service is running. " +
+                "Start it with: cd phonetics-service && ./start.sh"
+            )
+        }
+        
         try {
             // Декодируем аудио из base64
             val audioBytes = Base64.getDecoder().decode(request.audioData)
@@ -138,35 +148,50 @@ class DictationAnalysisService(
         }
         
         // Конвертируем в float массив (моно)
+        // Для моно канала: frameSize = bytesPerSample
+        // Для стерео: frameSize = bytesPerSample * 2
         val samples = FloatArray(frameLength * channels)
         
-        for (i in samples.indices) {
-            val byteIndex = i * bytesPerSample
-            if (byteIndex + bytesPerSample > totalRead) {
-                // Недостаточно данных, заполняем нулями
-                samples[i] = 0.0f
-                continue
-            }
+        var sampleIndex = 0
+        for (frame in 0 until frameLength) {
+            val frameByteIndex = frame * frameSize
             
-            when (bytesPerSample) {
-                1 -> {
-                    // 8-bit unsigned
-                    val unsigned = buffer[byteIndex].toInt() and 0xFF
-                    samples[i] = (unsigned / 128.0f) - 1.0f
+            for (channel in 0 until channels) {
+                val byteIndex = frameByteIndex + (channel * bytesPerSample)
+                
+                if (byteIndex + bytesPerSample > totalRead) {
+                    samples[sampleIndex++] = 0.0f
+                    continue
                 }
-                2 -> {
-                    // 16-bit signed
-                    val sample = if (isBigEndian) {
-                        ((buffer[byteIndex].toInt() and 0xFF) shl 8) or 
-                        (buffer[byteIndex + 1].toInt() and 0xFF)
-                    } else {
-                        (buffer[byteIndex].toInt() and 0xFF) or 
-                        ((buffer[byteIndex + 1].toInt() and 0xFF) shl 8)
+                
+                when (bytesPerSample) {
+                    1 -> {
+                        // 8-bit unsigned
+                        val unsigned = buffer[byteIndex].toInt() and 0xFF
+                        samples[sampleIndex++] = (unsigned - 128).toFloat() / 128.0f
                     }
-                    val signed = if (sample > 32767) sample - 65536 else sample
-                    samples[i] = signed / 32768.0f
+                    2 -> {
+                        // 16-bit signed
+                        val sample = if (isBigEndian) {
+                            ((buffer[byteIndex].toInt() and 0xFF) shl 8) or 
+                            (buffer[byteIndex + 1].toInt() and 0xFF)
+                        } else {
+                            (buffer[byteIndex].toInt() and 0xFF) or 
+                            ((buffer[byteIndex + 1].toInt() and 0xFF) shl 8)
+                        }
+                        val signed = if (sample > 32767) sample - 65536 else sample
+                        samples[sampleIndex++] = signed / 32768.0f
+                    }
+                    else -> throw IllegalArgumentException("Unsupported sample size: $bytesPerSample")
                 }
-                else -> throw IllegalArgumentException("Unsupported sample size: $bytesPerSample")
+            }
+        }
+        
+        // Логируем первые несколько сэмплов для отладки
+        if (samples.isNotEmpty()) {
+            logger.debug {
+                "First 10 samples: ${samples.take(10).joinToString { String.format("%.6f", it) }}, " +
+                "min=${samples.minOrNull()}, max=${samples.maxOrNull()}"
             }
         }
         
@@ -505,7 +530,7 @@ class DictationAnalysisService(
     /**
      * Анализ фонетики (сравнение с эталонным текстом)
      */
-    private fun analyzePhonetics(
+    private suspend fun analyzePhonetics(
         audioData: FloatArray,
         sampleRate: Int,
         expectedText: String,
@@ -552,6 +577,21 @@ class DictationAnalysisService(
             0.01f
         }
         
+        // Проверяем, что у нас есть данные (audioMax уже объявлена выше)
+        if (audioMax < 1e-6) {
+            logger.error { "All audio samples are zero or near-zero! audioData.size=${audioData.size}" }
+            // Возвращаем пустые результаты, но не бросаем исключение
+            return Pair(emptyList(), expectedPhonemes.mapIndexed { idx, phoneme ->
+                PhonemeAnalysis(
+                    phoneme = phoneme,
+                    position = idx,
+                    accuracy = 0.0,
+                    deviation = 1.0,
+                    issues = listOf("No audio data available")
+                )
+            })
+        }
+        
         // Равномерно распределяем время между фонемами
         val timePerPhoneme = if (expectedPhonemes.isNotEmpty()) {
             audioData.size.toDouble() / expectedPhonemes.size
@@ -559,9 +599,20 @@ class DictationAnalysisService(
             0.0
         }
         
+        // Если очень мало фонем или очень короткое аудио, используем весь сигнал для каждой фонемы
+        val useFullAudioForEachPhoneme = expectedPhonemes.size == 1 || audioData.size < sampleRate * 0.1
+        
         expectedPhonemes.forEachIndexed { index, expectedPhoneme ->
-            val startSample = (index * timePerPhoneme).toInt()
-            val endSample = min(((index + 1) * timePerPhoneme).toInt(), audioData.size)
+            val startSample = if (useFullAudioForEachPhoneme) {
+                0
+            } else {
+                (index * timePerPhoneme).toInt()
+            }
+            val endSample = if (useFullAudioForEachPhoneme) {
+                audioData.size
+            } else {
+                min(((index + 1) * timePerPhoneme).toInt(), audioData.size)
+            }
             
             // Ищем ближайшую область с достаточной энергией
             val searchRadius = (sampleRate * 0.1).toInt() // 100мс радиус поиска
@@ -693,7 +744,7 @@ class DictationAnalysisService(
     /**
      * Анализ отдельной фонемы
      */
-    private fun analyzePhoneme(
+    private suspend fun analyzePhoneme(
         audio: FloatArray,
         sampleRate: Int,
         expectedPhoneme: String,
@@ -774,20 +825,46 @@ class DictationAnalysisService(
             "negative=${windowed.count { it < 0.0f }}"
         }
         
-        val fft = fft(windowed)
-        val magnitude = fft.map { sqrt(it.first.pow(2) + it.second.pow(2)) }
+        // Используем только Praat для анализа формант
+        // Конвертируем FloatArray в WAV файл с заголовком
+        val audioBytes = createWavFile(windowed, sampleRate)
         
-        // Логирование спектральных характеристик
-        logger.debug {
-            "Spectrum analysis for '$expectedPhoneme': " +
-            "magnitude.size=${magnitude.size}, " +
-            "maxMagnitude=${magnitude.maxOfOrNull { it }?.let { String.format("%.2f", it) } ?: "N/A"}, " +
-            "magnitudeRange=[${magnitude.minOfOrNull { it }?.let { String.format("%.2f", it) } ?: "N/A"}.." +
-            "${magnitude.maxOfOrNull { it }?.let { String.format("%.2f", it) } ?: "N/A"}]"
+        // Вызываем Praat-сервис (обязательно)
+        val praatResult = try {
+            praatFormantService.analyzePhonemeWithPraat(
+                audioBytes = audioBytes,
+                phoneme = expectedPhoneme
+            )
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to call Praat service for phoneme '$expectedPhoneme': ${e.message}" }
+            throw IllegalStateException(
+                "Praat service is not available. Please ensure the Python phonetics service is running on ${praatFormantService.serviceUrl}. " +
+                "Error: ${e.message}"
+            )
         }
         
-        // Находим форманты (пики в спектре)
-        val formants = findFormants(magnitude, sampleRate, expectedPhoneme)
+        if (praatResult == null) {
+            throw IllegalStateException(
+                "Praat service returned null result for phoneme '$expectedPhoneme'. " +
+                "Please check the Python phonetics service logs."
+            )
+        }
+        
+        if (praatResult.f1 == null || praatResult.f2 == null) {
+            throw IllegalStateException(
+                "Praat service returned incomplete formant analysis for phoneme '$expectedPhoneme'. " +
+                "F1=${praatResult.f1}, F2=${praatResult.f2}. " +
+                "Please check the audio quality and Praat service configuration."
+            )
+        }
+        
+        logger.info { 
+            "Praat analysis for '$expectedPhoneme': " +
+            "F1=${praatResult.f1}, F2=${praatResult.f2}, F0=${praatResult.f0}, " +
+            "bandwidthF1=${praatResult.bandwidthF1}, bandwidthF2=${praatResult.bandwidthF2}"
+        }
+        
+        val formants = listOfNotNull(praatResult.f1, praatResult.f2, praatResult.f3, praatResult.f4)
         
         // Сравниваем с ожидаемыми характеристиками фонемы
         val expectedFormants = getExpectedFormants(expectedPhoneme)
@@ -919,6 +996,49 @@ class DictationAnalysisService(
         }
         
         return formants
+    }
+    
+    /**
+     * Создает WAV файл из FloatArray с правильным заголовком
+     */
+    private fun createWavFile(audioData: FloatArray, sampleRate: Int): ByteArray {
+        val numChannels = 1 // моно
+        val bitsPerSample = 16
+        val byteRate = sampleRate * numChannels * bitsPerSample / 8
+        val blockAlign = numChannels * bitsPerSample / 8
+        val dataSize = audioData.size * 2 // 2 bytes per sample
+        val fileSize = 36 + dataSize // 36 bytes header + data
+        
+        val wavBytes = ByteArray(44 + dataSize) // 44 bytes WAV header + data
+        val buffer = java.nio.ByteBuffer.wrap(wavBytes)
+        buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        
+        // RIFF header
+        buffer.put("RIFF".toByteArray())
+        buffer.putInt(fileSize)
+        buffer.put("WAVE".toByteArray())
+        
+        // fmt chunk
+        buffer.put("fmt ".toByteArray())
+        buffer.putInt(16) // fmt chunk size
+        buffer.putShort(1.toShort()) // audio format (1 = PCM)
+        buffer.putShort(numChannels.toShort())
+        buffer.putInt(sampleRate)
+        buffer.putInt(byteRate)
+        buffer.putShort(blockAlign.toShort())
+        buffer.putShort(bitsPerSample.toShort())
+        
+        // data chunk
+        buffer.put("data".toByteArray())
+        buffer.putInt(dataSize)
+        
+        // PCM data
+        audioData.forEach { sample ->
+            val intSample = (sample * 32767.0f).toInt().coerceIn(-32768, 32767)
+            buffer.putShort(intSample.toShort())
+        }
+        
+        return wavBytes
     }
     
     /**

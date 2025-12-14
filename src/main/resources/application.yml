@@ -96,3 +96,10 @@ yandex:
 cors:
   allowed-origins: ${CORS_ORIGINS:http://localhost:5173,http://localhost:3000,http://localhost:3001}
 
+# Phonetics Service (Praat) Configuration
+phonetics:
+  service:
+    # URL Python-сервиса для анализа формант
+    # Если не указан или сервис недоступен, используется встроенный FFT анализ
+    url: ${PHONETICS_SERVICE_URL:http://localhost:8041}
+

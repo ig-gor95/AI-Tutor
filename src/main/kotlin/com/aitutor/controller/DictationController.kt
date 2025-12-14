@@ -108,6 +108,45 @@ class DictationController(
                 dictationAnalysisService.analyzeDictation(request)
             }
             ResponseEntity.ok(response)
+        } catch (e: IllegalStateException) {
+            // Ошибка недоступности Praat-сервиса
+            ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(DictationAnalysisResponse(
+                    success = false,
+                    overallAccuracy = 0.0,
+                    words = emptyList(),
+                    phonemes = emptyList(),
+                    intonation = com.aitutor.model.dto.IntonationAnalysis(
+                        pitchContour = emptyList(),
+                        pitchVariation = 0.0,
+                        averagePitch = 0.0,
+                        pitchRange = 0.0,
+                        monotonyScore = 0.0,
+                        intonationPattern = null
+                    ),
+                    timbre = com.aitutor.model.dto.TimbreAnalysis(
+                        spectralCentroid = 0.0,
+                        spectralRolloff = 0.0,
+                        zeroCrossingRate = 0.0,
+                        mfcc = emptyList(),
+                        harmonicity = null
+                    ),
+                    articulation = com.aitutor.model.dto.ArticulationAnalysis(
+                        clarity = 0.0,
+                        consonantAccuracy = 0.0,
+                        vowelAccuracy = 0.0,
+                        transitionSmoothness = 0.0,
+                        issues = listOf("Praat service error: ${e.message}")
+                    ),
+                    audioDuration = 0.0,
+                    sampleRate = 0,
+                    issues = listOf("Praat service error: ${e.message}"),
+                    recommendations = listOf(
+                        "Please ensure the Python phonetics service is running.",
+                        "Start it with: cd phonetics-service && ./start.sh",
+                        "Check service health at: http://localhost:8041/health"
+                    )
+                ))
         } catch (e: Exception) {
             ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(DictationAnalysisResponse(
