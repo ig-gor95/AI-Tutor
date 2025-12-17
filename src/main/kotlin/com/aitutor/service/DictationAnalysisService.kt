@@ -44,6 +44,21 @@ class DictationAnalysisService(
             val decodeTime = (System.nanoTime() - decodeStartTime) / 1_000_000.0 // в миллисекундах
             logger.info { "Decoded audio bytes: size=${audioBytes.size}, first 20 bytes (hex): ${audioBytes.take(20).joinToString(" ") { "%02X".format(it) }}, time=${String.format("%.2f", decodeTime)}ms" }
             
+            // Проверяем, что это действительно WAV файл
+            val wavHeader = audioBytes.take(4).map { it.toInt().toChar() }.joinToString("")
+            if (wavHeader != "RIFF" && request.audioFormat.lowercase() == "wav") {
+                logger.warn { "WAV header mismatch: expected 'RIFF', got '$wavHeader'. Audio may be corrupted or in wrong format." }
+            }
+            
+            // Проверяем, что есть ненулевые данные
+            val nonZeroInHeader = audioBytes.take(100).count { it != 0.toByte() }
+            if (nonZeroInHeader < 10) {
+                logger.error { 
+                    "WARNING: Audio data appears to be mostly zeros (only $nonZeroInHeader non-zero bytes in first 100). " +
+                    "This may indicate a problem with audio recording or transmission."
+                }
+            }
+            
             val audioStream = ByteArrayInputStream(audioBytes)
             
             // Определяем формат аудио
@@ -221,6 +236,18 @@ class DictationAnalysisService(
             previewBytes.joinToString(" ") { it.toInt().toString() }
         }
         
+        // Проверяем, есть ли ненулевые байты в начале
+        val nonZeroBytesCount = buffer.take(1000).count { it != 0.toByte() }
+        logger.info { "Non-zero bytes in first 1000: $nonZeroBytesCount/1000" }
+        
+        // Если все нули, это проблема
+        if (nonZeroBytesCount == 0 && totalRead > 100) {
+            logger.error { 
+                "WARNING: All bytes are zero! This indicates a problem with audio decoding. " +
+                "Total bytes read: $totalRead, frameLength: $frameLength, frameSize: $frameSize"
+            }
+        }
+        
         // Конвертируем в float массив (моно)
         // Для моно канала: frameSize = bytesPerSample
         // Для стерео: frameSize = bytesPerSample * 2
@@ -258,10 +285,11 @@ class DictationAnalysisService(
                         samples[sampleIndex++] = floatValue
                         
                         // Логируем первые несколько конвертаций для отладки
-                        if (sampleIndex <= 5) {
-                            logger.debug {
+                        if (sampleIndex <= 10) {
+                            logger.info {
                                 "Sample $sampleIndex: bytes=[$byte0, $byte1], " +
-                                "raw=$sample, signed=$signed, float=$floatValue"
+                                "raw=$sample, signed=$signed, float=$floatValue, " +
+                                "isBigEndian=$isBigEndian, byteIndex=$byteIndex"
                             }
                         }
                     }
@@ -1298,11 +1326,11 @@ class DictationAnalysisService(
         // Используем средние значения
         val expected = mapOf(
             "а" to Pair(730.0, 1090.0),  // Исправлено на более точные значения для русского "а"
-            "э" to Pair(530.0, 1840.0),
-            "о" to Pair(570.0, 840.0),
+            "э" to Pair(650.0, 1800.0),  // Обновлено: F1 выше в реальной речи (было 530)
+            "о" to Pair(570.0, 900.0),   // Обновлено: F2 может быть выше (было 840)
             "у" to Pair(350.0, 900.0),  // Обновлено: F1 может быть выше в контексте слова
             "ы" to Pair(440.0, 1020.0),
-            "и" to Pair(270.0, 2290.0),
+            "и" to Pair(400.0, 2100.0),  // Обновлено: F1 выше в реальной речи (было 270)
             "е" to Pair(530.0, 1840.0),
             "ю" to Pair(300.0, 1800.0),
             "я" to Pair(500.0, 1600.0),
@@ -1324,11 +1352,11 @@ class DictationAnalysisService(
         // Определяем допустимые диапазоны для гласных (расширены для учета вариаций между говорящими)
         val vowelRanges = mapOf(
             "а" to Pair(Pair(400.0, 1100.0), Pair(800.0, 1700.0)),  // F1: 400-1100 (расширен), F2: 800-1700 (расширен)
-            "э" to Pair(Pair(350.0, 800.0), Pair(1400.0, 2400.0)),
-            "о" to Pair(Pair(350.0, 850.0), Pair(550.0, 1300.0)),
-            "у" to Pair(Pair(250.0, 950.0), Pair(600.0, 1800.0)),  // Расширен диапазон для "у" с учетом контекста
+            "э" to Pair(Pair(450.0, 900.0), Pair(1200.0, 2400.0)),  // Расширен F1 диапазон (было 350-800)
+            "о" to Pair(Pair(350.0, 900.0), Pair(600.0, 2200.0)),   // Расширен F2 диапазон для "о" (было 550-1300)
+            "у" to Pair(Pair(250.0, 1000.0), Pair(600.0, 1800.0)),  // Расширен F1 диапазон для "у" (было 250-950)
             "ы" to Pair(Pair(280.0, 650.0), Pair(750.0, 1500.0)),
-            "и" to Pair(Pair(180.0, 450.0), Pair(1900.0, 2900.0)),
+            "и" to Pair(Pair(250.0, 700.0), Pair(1700.0, 2900.0)),  // Расширен F1 диапазон для "и" (было 180-450)
             "е" to Pair(Pair(350.0, 800.0), Pair(1400.0, 2400.0)),
             "ю" to Pair(Pair(180.0, 550.0), Pair(1400.0, 2400.0)),
             "я" to Pair(Pair(350.0, 800.0), Pair(1100.0, 2100.0)),
@@ -1408,12 +1436,19 @@ class DictationAnalysisService(
         val f2DiffOriginal = abs(actualF2 - f2Expected)
         val f2DiffFromExpectedPercent = f2DiffOriginal / f2Expected
         
-        // Для 'у' и 'а' используем более мягкую логику, так как F2 может быть выше в контексте
-        val isU = expectedPhoneme.lowercase() == "у"
-        val isA = expectedPhoneme.lowercase() == "а"
+        // Для 'у', 'а', 'э', 'и', 'о' используем более мягкую логику, так как они сильно зависят от контекста
+        val phoneme = expectedPhoneme.lowercase()
+        val isU = phoneme == "у"
+        val isA = phoneme == "а"
+        val isE = phoneme == "э" || phoneme == "е"
+        val isI = phoneme == "и"
+        val isO = phoneme == "о"
+        val isContextualVowel = isU || isA || isE || isI || isO
+        
         val f2F3CheckThresholdPercent = when {
             isU -> 0.6  // Для 'у' допускаем 60% отклонение при проверке F2/F3
-            isA -> 0.5  // Для 'а' допускаем 50% отклонение при проверке F2/F3
+            isA || isE -> 0.5  // Для 'а' и 'э' допускаем 50% отклонение
+            isI || isO -> 0.5  // Для 'и' и 'о' допускаем 50% отклонение
             else -> 0.4 // Для остальных 40%
         }
         
@@ -1422,10 +1457,11 @@ class DictationAnalysisService(
             val f3Diff = abs(formants.f3 - f2Expected)
             val f3DiffPercent = f3Diff / f2Expected
             
-            // Для 'у' и 'а' также используем более мягкий порог для F3
+            // Для контекстных гласных также используем более мягкий порог для F3
             val f3ThresholdPercent = when {
                 isU -> 0.6
-                isA -> 0.5
+                isA || isE -> 0.5
+                isI || isO -> 0.5
                 else -> 0.4
             }
             
@@ -1437,15 +1473,16 @@ class DictationAnalysisService(
                 }
                 actualF2 = formants.f3
             } else {
-                // Для 'у' и 'а' не считаем это критической ошибкой, если F2 в допустимом диапазоне
-                val isAcceptableRange = when {
-                    isU && actualF2 in 600.0..1800.0 -> true
-                    isA && actualF2 in 800.0..1700.0 -> true
-                    else -> false
+                // Для контекстных гласных не считаем это критической ошибкой, если F2 в допустимом диапазоне
+                val (isAcceptableRange, phonemeName, rangeStr) = when {
+                    isU && actualF2 in 600.0..1800.0 -> Triple(true, "у", "[600-1800]")
+                    isA && actualF2 in 800.0..1700.0 -> Triple(true, "а", "[800-1700]")
+                    isE && actualF2 in 1200.0..2400.0 -> Triple(true, "э", "[1200-2400]")
+                    isO && actualF2 in 600.0..2200.0 -> Triple(true, "о", "[600-2200]")
+                    isI && actualF2 in 1700.0..2900.0 -> Triple(true, "и", "[1700-2900]")
+                    else -> Triple(false, phoneme, "")
                 }
                 if (isAcceptableRange) {
-                    val phonemeName = if (isU) "у" else "а"
-                    val rangeStr = if (isU) "[600-1800]" else "[800-1700]"
                     logger.debug {
                         "Phoneme '$phonemeName': F2=${actualF2.toInt()} Hz is within acceptable range $rangeStr Hz, " +
                         "even though it differs from expected ${f2Expected.toInt()} Hz. This is acceptable for '$phonemeName' in context."
@@ -1468,15 +1505,18 @@ class DictationAnalysisService(
         // Для гласных допустимы большие отклонения из-за различий между говорящими
         // Используем проценты от эталонных значений для более справедливой оценки
         // Расширены пороги для учета больших вариаций между говорящими
-        // Для 'у' и 'а' используем более мягкие пороги, так как они сильно зависят от контекста
+        // Для контекстных гласных используем более мягкие пороги
         val f1ThresholdPercent = when {
             isU -> 0.6  // Для 'у' 60%
-            isA -> 0.5  // Для 'а' 50%
+            isA || isE -> 0.5  // Для 'а' и 'э' 50%
+            isI || isO -> 0.5  // Для 'и' и 'о' 50%
             else -> 0.4 // Для остальных 40%
         }
         val f2ThresholdPercent = when {
             isU -> 0.7  // Для 'у' 70%
             isA -> 0.6  // Для 'а' 60%
+            isE || isO -> 0.6  // Для 'э' и 'о' 60%
+            isI -> 0.5  // Для 'и' 50%
             else -> 0.5 // Для остальных 50%
         }
         val f1Threshold = expectedFormantsNonNull.first * f1ThresholdPercent
@@ -1484,10 +1524,12 @@ class DictationAnalysisService(
         
         // Если F2 сильно отличается (возможно это F3 вместо F2), применяем штраф
         // Но только если отклонение очень большое (более 100%), чтобы не штрафовать нормальные вариации
-        // Для 'у' и 'а' используем более мягкий порог, так как F2 сильно варьируется
+        // Для контекстных гласных используем более мягкий порог
         val f2PenaltyThreshold = when {
             isU -> 1.5  // Для 'у' 150%
             isA -> 1.3  // Для 'а' 130%
+            isE || isO -> 1.3  // Для 'э' и 'о' 130%
+            isI -> 1.2  // Для 'и' 120%
             else -> 1.0 // Для остальных 100%
         }
         val f2Penalty = if (f2Diff > expectedFormantsNonNull.second * f2PenaltyThreshold) {
