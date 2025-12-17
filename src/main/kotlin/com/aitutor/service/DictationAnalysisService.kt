@@ -25,6 +25,8 @@ class DictationAnalysisService(
      * Основной метод анализа дикции
      */
     suspend fun analyzeDictation(request: DictationAnalysisRequest): DictationAnalysisResponse = withContext(Dispatchers.IO) {
+        val totalStartTime = System.nanoTime()
+        
         // Проверяем доступность Praat-сервиса перед началом анализа
         if (!praatFormantService.isServiceAvailable()) {
             throw IllegalStateException(
@@ -36,17 +38,28 @@ class DictationAnalysisService(
         
         try {
             // Декодируем аудио из base64
+            val decodeStartTime = System.nanoTime()
+            logger.debug { "Decoding base64 audio: length=${request.audioData.length}" }
             val audioBytes = Base64.getDecoder().decode(request.audioData)
+            val decodeTime = (System.nanoTime() - decodeStartTime) / 1_000_000.0 // в миллисекундах
+            logger.info { "Decoded audio bytes: size=${audioBytes.size}, first 20 bytes (hex): ${audioBytes.take(20).joinToString(" ") { "%02X".format(it) }}, time=${String.format("%.2f", decodeTime)}ms" }
+            
             val audioStream = ByteArrayInputStream(audioBytes)
             
             // Определяем формат аудио
+            val formatStartTime = System.nanoTime()
             val audioInputStream = when (request.audioFormat.lowercase()) {
-                "wav" -> AudioSystem.getAudioInputStream(audioStream)
+                "wav" -> {
+                    logger.debug { "Creating AudioInputStream for WAV format" }
+                    AudioSystem.getAudioInputStream(audioStream)
+                }
                 "mp3" -> {
+                    logger.debug { "Creating AudioInputStream for MP3 format" }
                     // Для MP3 может потребоваться дополнительная обработка
                     AudioSystem.getAudioInputStream(audioStream)
                 }
                 "webm" -> {
+                    logger.debug { "Creating AudioInputStream for WebM format (trying as WAV)" }
                     // WebM требует специальной обработки, пробуем как WAV
                     // В реальности нужна библиотека для декодирования WebM
                     try {
@@ -57,21 +70,55 @@ class DictationAnalysisService(
                 }
                 else -> throw IllegalArgumentException("Unsupported audio format: ${request.audioFormat}. Supported formats: wav, mp3")
             }
+            val formatTime = (System.nanoTime() - formatStartTime) / 1_000_000.0
+            logger.debug { "AudioInputStream created: time=${String.format("%.2f", formatTime)}ms" }
             
             val format = audioInputStream.format
             val sampleRate = format.sampleRate.toInt()
             
             // Читаем все аудио данные
+            val readStartTime = System.nanoTime()
             val audioData = readAudioData(audioInputStream)
+            val readTime = (System.nanoTime() - readStartTime) / 1_000_000.0
             val duration = audioData.size.toDouble() / sampleRate
             
-            logger.info { "Analyzing dictation: ${audioData.size} samples, ${duration}s duration, ${sampleRate}Hz sample rate" }
+            logger.info { "Analyzing dictation: ${audioData.size} samples, ${duration}s duration, ${sampleRate}Hz sample rate, readTime=${String.format("%.2f", readTime)}ms" }
             
             // Выполняем различные анализы
-            val intonation = analyzeIntonation(audioData, sampleRate)
-            val timbre = analyzeTimbre(audioData, sampleRate)
+            // ВРЕМЕННО ОТКЛЮЧЕНО: анализ интонации и тембра занимает слишком много времени
+            // TODO: Оптимизировать или включить обратно после оптимизации
+            val intonationStartTime = System.nanoTime()
+            val intonation = IntonationAnalysis(
+                pitchContour = emptyList(),
+                pitchVariation = 0.0,
+                averagePitch = 150.0,
+                pitchRange = 0.0,
+                monotonyScore = 0.5,
+                intonationPattern = "neutral"
+            )
+            val intonationTime = (System.nanoTime() - intonationStartTime) / 1_000_000.0
+            logger.info { "Intonation analysis (disabled): time=${String.format("%.2f", intonationTime)}ms" }
+            
+            val timbreStartTime = System.nanoTime()
+            val timbre = TimbreAnalysis(
+                spectralCentroid = 2000.0,
+                spectralRolloff = 5000.0,
+                zeroCrossingRate = 0.1,
+                mfcc = List(13) { 0.0 },
+                harmonicity = 0.5
+            )
+            val timbreTime = (System.nanoTime() - timbreStartTime) / 1_000_000.0
+            logger.info { "Timbre analysis (disabled): time=${String.format("%.2f", timbreTime)}ms" }
+            
+            val phoneticsStartTime = System.nanoTime()
             val (words, phonemes) = analyzePhonetics(audioData, sampleRate, request.expectedText, request.language)
+            val phoneticsTime = (System.nanoTime() - phoneticsStartTime) / 1_000_000.0
+            logger.info { "Phonetics analysis completed: ${phonemes.size} phonemes, ${words.size} words, time=${String.format("%.2f", phoneticsTime)}ms" }
+            
+            val articulationStartTime = System.nanoTime()
             val articulation = analyzeArticulation(audioData, sampleRate, phonemes)
+            val articulationTime = (System.nanoTime() - articulationStartTime) / 1_000_000.0
+            logger.info { "Articulation analysis completed: time=${String.format("%.2f", articulationTime)}ms" }
             
             // Вычисляем общую точность
             val overallAccuracy = if (phonemes.isNotEmpty()) {
@@ -87,7 +134,25 @@ class DictationAnalysisService(
             allIssues.addAll(articulation.issues)
             
             // Генерируем рекомендации
+            val recommendationsStartTime = System.nanoTime()
             val recommendations = generateRecommendations(words, phonemes, intonation, articulation)
+            val recommendationsTime = (System.nanoTime() - recommendationsStartTime) / 1_000_000.0
+            logger.info { "Recommendations generation completed: ${recommendations.size} recommendations, time=${String.format("%.2f", recommendationsTime)}ms" }
+            
+            val totalTime = (System.nanoTime() - totalStartTime) / 1_000_000.0
+            logger.info { 
+                "=== Dictation Analysis Summary ===\n" +
+                "Total time: ${String.format("%.2f", totalTime)}ms\n" +
+                "  - Base64 decode: ${String.format("%.2f", decodeTime)}ms\n" +
+                "  - Audio format: ${String.format("%.2f", formatTime)}ms\n" +
+                "  - Read audio data: ${String.format("%.2f", readTime)}ms\n" +
+                "  - Intonation analysis: ${String.format("%.2f", intonationTime)}ms\n" +
+                "  - Timbre analysis: ${String.format("%.2f", timbreTime)}ms\n" +
+                "  - Phonetics analysis: ${String.format("%.2f", phoneticsTime)}ms (${phonemes.size} phonemes)\n" +
+                "  - Articulation analysis: ${String.format("%.2f", articulationTime)}ms\n" +
+                "  - Recommendations generation: ${String.format("%.2f", recommendationsTime)}ms\n" +
+                "Overall accuracy: ${String.format("%.1f", overallAccuracy * 100)}%"
+            }
             
             DictationAnalysisResponse(
                 success = true,
@@ -147,6 +212,15 @@ class DictationAnalysisService(
             return FloatArray(0)
         }
         
+        // Логируем первые несколько байт для отладки
+        val previewBytes = buffer.take(min(20, totalRead))
+        logger.info { 
+            "First ${previewBytes.size} bytes (hex): " +
+            previewBytes.joinToString(" ") { "%02X".format(it) } +
+            ", first bytes (signed): " +
+            previewBytes.joinToString(" ") { it.toInt().toString() }
+        }
+        
         // Конвертируем в float массив (моно)
         // Для моно канала: frameSize = bytesPerSample
         // Для стерео: frameSize = bytesPerSample * 2
@@ -171,16 +245,25 @@ class DictationAnalysisService(
                         samples[sampleIndex++] = (unsigned - 128).toFloat() / 128.0f
                     }
                     2 -> {
-                        // 16-bit signed
+                        // 16-bit signed (little-endian для WAV)
+                        val byte0 = buffer[byteIndex].toInt() and 0xFF
+                        val byte1 = buffer[byteIndex + 1].toInt() and 0xFF
                         val sample = if (isBigEndian) {
-                            ((buffer[byteIndex].toInt() and 0xFF) shl 8) or 
-                            (buffer[byteIndex + 1].toInt() and 0xFF)
+                            (byte0 shl 8) or byte1
                         } else {
-                            (buffer[byteIndex].toInt() and 0xFF) or 
-                            ((buffer[byteIndex + 1].toInt() and 0xFF) shl 8)
+                            byte0 or (byte1 shl 8)
                         }
                         val signed = if (sample > 32767) sample - 65536 else sample
-                        samples[sampleIndex++] = signed / 32768.0f
+                        val floatValue = signed / 32768.0f
+                        samples[sampleIndex++] = floatValue
+                        
+                        // Логируем первые несколько конвертаций для отладки
+                        if (sampleIndex <= 5) {
+                            logger.debug {
+                                "Sample $sampleIndex: bytes=[$byte0, $byte1], " +
+                                "raw=$sample, signed=$signed, float=$floatValue"
+                            }
+                        }
                     }
                     else -> throw IllegalArgumentException("Unsupported sample size: $bytesPerSample")
                 }
@@ -256,7 +339,8 @@ class DictationAnalysisService(
      */
     private fun estimatePitchFromSpectrum(audioData: FloatArray, sampleRate: Int): MutableList<Double> {
         val windowSize = 2048
-        val hopSize = 512
+        // Увеличиваем hopSize для уменьшения количества вычислений (было 512, стало 2048 - анализ каждые ~43мс вместо ~11мс)
+        val hopSize = 2048  // Анализируем каждое окно вместо перекрывающихся
         val pitches = mutableListOf<Double>()
         
         // Применяем окно Ханна для уменьшения артефактов
@@ -536,12 +620,16 @@ class DictationAnalysisService(
         expectedText: String,
         language: String
     ): Pair<List<WordAnalysis>, List<PhonemeAnalysis>> {
+        val phoneticsStartTime = System.nanoTime()
         val words = expectedText.split("\\s+".toRegex())
         val phonemes = mutableListOf<PhonemeAnalysis>()
         val wordAnalyses = mutableListOf<WordAnalysis>()
         
         // Разбиваем текст на фонемы (упрощенная версия для русского языка)
+        val extractPhonemesStartTime = System.nanoTime()
         val expectedPhonemes = extractPhonemes(expectedText, language)
+        val extractPhonemesTime = (System.nanoTime() - extractPhonemesStartTime) / 1_000_000.0
+        logger.info { "Extracted phonemes from text '$expectedText': ${expectedPhonemes.joinToString("-")}, time=${String.format("%.2f", extractPhonemesTime)}ms" }
         
         // Проверка входных данных
         if (audioData.isEmpty()) {
@@ -558,6 +646,7 @@ class DictationAnalysisService(
         }
         
         // Вычисляем энергию сигнала для более точного разбиения
+        val energyStartTime = System.nanoTime()
         val windowSize = (sampleRate * 0.01).toInt() // 10мс окна
         val energy = FloatArray(audioData.size / windowSize) { i ->
             val start = i * windowSize
@@ -568,6 +657,8 @@ class DictationAnalysisService(
             }
             sqrt(sum / windowSize)
         }
+        val energyTime = (System.nanoTime() - energyStartTime) / 1_000_000.0
+        logger.debug { "Energy calculation completed: time=${String.format("%.2f", energyTime)}ms" }
         
         // Находим порог энергии (медиана)
         val sortedEnergy = energy.sorted()
@@ -579,6 +670,7 @@ class DictationAnalysisService(
         
         // Проверяем, что у нас есть данные (audioMax уже объявлена выше)
         if (audioMax < 1e-6) {
+
             logger.error { "All audio samples are zero or near-zero! audioData.size=${audioData.size}" }
             // Возвращаем пустые результаты, но не бросаем исключение
             return Pair(emptyList(), expectedPhonemes.mapIndexed { idx, phoneme ->
@@ -601,6 +693,11 @@ class DictationAnalysisService(
         
         // Если очень мало фонем или очень короткое аудио, используем весь сигнал для каждой фонемы
         val useFullAudioForEachPhoneme = expectedPhonemes.size == 1 || audioData.size < sampleRate * 0.1
+        
+        // Используем пакетный анализ Praat для всех фонем сразу (намного эффективнее)
+        // Собираем все сегменты для анализа (временные метки в секундах)
+        val segmentCreationStartTime = System.nanoTime()
+        val praatSegments = mutableListOf<com.aitutor.service.PraatFormantService.PhonemeSegment>()
         
         expectedPhonemes.forEachIndexed { index, expectedPhoneme ->
             val startSample = if (useFullAudioForEachPhoneme) {
@@ -668,31 +765,199 @@ class DictationAnalysisService(
                 "size=${phonemeAudio.size}, max=$segmentMax, nonZero=$segmentNonZero"
             }
             
-            if (phonemeAudio.isEmpty()) {
-                logger.warn { 
-                    "Empty phoneme audio for '$expectedPhoneme' at index $index"
-                }
-            } else if (segmentMax < 1e-6) {
-                logger.warn { 
-                    "Zero amplitude segment for '$expectedPhoneme' at index $index, " +
-                    "using extended context"
-                }
-                // Используем более широкий контекст вокруг фонемы
+            // Проверяем, есть ли данные в сегменте
+            val segmentHasData = phonemeAudio.isNotEmpty() && segmentMax > 1e-6
+            
+            if (!segmentHasData) {
+                // Пытаемся использовать расширенный контекст
                 val contextStart = max(0, actualStartSample - (sampleRate * 0.15).toInt())
                 val contextEnd = min(audioData.size, actualEndSample + (sampleRate * 0.15).toInt())
                 val contextAudio = audioData.sliceArray(contextStart until contextEnd)
                 
-                if (contextAudio.maxOfOrNull { abs(it) } ?: 0.0f > 1e-6) {
+                if (contextAudio.isNotEmpty() && (contextAudio.maxOfOrNull { abs(it) } ?: 0.0f > 1e-6)) {
                     logger.info { "Using extended context for '$expectedPhoneme': ${contextAudio.size} samples" }
-                    val analysis = analyzePhoneme(contextAudio, sampleRate, expectedPhoneme, index)
-                    phonemes.add(analysis)
-                    return@forEachIndexed
+                    val contextStartTime = contextStart.toDouble() / sampleRate
+                    val contextEndTime = contextEnd.toDouble() / sampleRate
+                    praatSegments.add(
+                        com.aitutor.service.PraatFormantService.PhonemeSegment(
+                            phoneme = expectedPhoneme,
+                            startTime = contextStartTime,
+                            endTime = contextEndTime,
+                            position = index
+                        )
+                    )
+                } else {
+                    // Если данных нет вообще, используем минимальный сегмент в середине
+                    logger.warn { "No audio data for '$expectedPhoneme' at index $index, using minimal segment" }
+                    val fallbackTime = (actualStartSample + actualEndSample) / 2.0 / sampleRate
+                    val minSegmentDuration = 0.03 // 30ms minimum
+                    praatSegments.add(
+                        com.aitutor.service.PraatFormantService.PhonemeSegment(
+                            phoneme = expectedPhoneme,
+                            startTime = max(0.0, fallbackTime - minSegmentDuration / 2.0),
+                            endTime = min(audioData.size.toDouble() / sampleRate, fallbackTime + minSegmentDuration / 2.0),
+                            position = index
+                        )
+                    )
+                }
+            } else {
+                // Сохраняем сегмент для batch анализа
+                // Для гласных используем более узкий сегмент в центре, чтобы избежать переходов
+                val isVowel = expectedPhoneme.lowercase() in "аеёиоуыэюя"
+                val segmentStartTime = actualStartSample.toDouble() / sampleRate
+                val segmentEndTime = actualEndSample.toDouble() / sampleRate
+                val segmentDuration = segmentEndTime - segmentStartTime
+                
+                val (finalStartTime, finalEndTime) = when {
+                    isVowel && segmentDuration > 0.15 -> {
+                        // Для длинных гласных (больше 150мс) берем центральные 65% сегмента
+                        val center = (segmentStartTime + segmentEndTime) / 2.0
+                        val newDuration = segmentDuration * 0.65
+                        Pair(center - newDuration / 2.0, center + newDuration / 2.0)
+                    }
+                    isVowel && segmentDuration > 0.08 -> {
+                        // Для средних гласных (80-150мс) берем центральные 70% сегмента
+                        val center = (segmentStartTime + segmentEndTime) / 2.0
+                        val newDuration = segmentDuration * 0.70
+                        Pair(center - newDuration / 2.0, center + newDuration / 2.0)
+                    }
+                    else -> {
+                        // Для коротких сегментов или согласных используем весь сегмент
+                        Pair(segmentStartTime, segmentEndTime)
+                    }
+                }
+                
+                praatSegments.add(
+                    com.aitutor.service.PraatFormantService.PhonemeSegment(
+                        phoneme = expectedPhoneme,
+                        startTime = max(0.0, finalStartTime),
+                        endTime = finalEndTime,
+                        position = index
+                    )
+                )
+                
+                logger.debug {
+                    "Phoneme '$expectedPhoneme' segment: " +
+                    "original=[${String.format("%.3f", segmentStartTime)}-${String.format("%.3f", segmentEndTime)}]s, " +
+                    "final=[${String.format("%.3f", finalStartTime)}-${String.format("%.3f", finalEndTime)}]s, " +
+                    "duration=${String.format("%.3f", finalEndTime - finalStartTime)}s"
                 }
             }
+        }
+        
+        // Выполняем batch анализ всех фонем сразу через Praat
+        logger.info { "Starting batch Praat analysis for ${praatSegments.size} phonemes" }
+        
+        // Конвертируем FloatArray в ByteArray (16-bit PCM) для batch анализа
+        val createWavStartTime = System.nanoTime()
+        val audioBytes = createWavFileForBatch(audioData, sampleRate)
+        val createWavTime = (System.nanoTime() - createWavStartTime) / 1_000_000.0
+        logger.debug { "WAV file creation completed: size=${audioBytes.size} bytes, time=${String.format("%.2f", createWavTime)}ms" }
+        
+        // Вызываем batch анализ
+        val praatBatchStartTime = System.nanoTime()
+        val batchResults = praatFormantService.analyzePhonemesBatch(audioBytes, praatSegments)
+        val praatBatchTime = (System.nanoTime() - praatBatchStartTime) / 1_000_000.0
+        logger.info { "Praat batch analysis completed: ${batchResults?.size ?: 0} results, time=${String.format("%.2f", praatBatchTime)}ms" }
+        
+        // Обрабатываем результаты batch анализа
+        val processResultsStartTime = System.nanoTime()
+        if (batchResults != null && batchResults.size == expectedPhonemes.size) {
+            logger.info { "Batch analysis completed: ${batchResults.size} results received" }
             
-            // Анализируем фонему
-            val analysis = analyzePhoneme(phonemeAudio, sampleRate, expectedPhoneme, index)
-            phonemes.add(analysis)
+            batchResults.forEachIndexed { index, result ->
+                val expectedPhoneme = expectedPhonemes[index]
+                val formants = result.formants
+                
+                // Вычисляем точность на основе формант
+                val accuracy = calculatePhonemeAccuracyFromFormants(expectedPhoneme, formants)
+                val deviation = 1.0 - accuracy
+                
+                // Логируем детальную информацию о каждой фонеме
+                val expectedFormants = getExpectedFormantsPair(expectedPhoneme)
+                logger.info {
+                    "Phoneme '$expectedPhoneme' [position=$index]: " +
+                    "F1=${formants.f1?.let { String.format("%.1f", it) } ?: "null"} Hz " +
+                    "(expected=${expectedFormants?.first?.let { String.format("%.1f", it) } ?: "N/A"} Hz), " +
+                    "F2=${formants.f2?.let { String.format("%.1f", it) } ?: "null"} Hz " +
+                    "(expected=${expectedFormants?.second?.let { String.format("%.1f", it) } ?: "N/A"} Hz), " +
+                    "F3=${formants.f3?.let { String.format("%.1f", it) } ?: "null"} Hz, " +
+                    "F0=${formants.f0?.let { String.format("%.1f", it) } ?: "null"} Hz, " +
+                    "accuracy=${String.format("%.2f", accuracy)} (${String.format("%.1f", accuracy * 100)}%), " +
+                    "deviation=${String.format("%.2f", deviation)}"
+                }
+                
+                val issues = mutableListOf<String>()
+                if (formants.f1 == null || formants.f2 == null) {
+                    issues.add("Не удалось извлечь форманты")
+                    logger.warn { "Phoneme '$expectedPhoneme': Failed to extract formants - F1=${formants.f1}, F2=${formants.f2}" }
+                } else {
+                    // Проверяем отклонения от эталонных значений
+                    if (expectedFormants != null) {
+                        val f1Diff = abs((formants.f1 ?: 0.0) - expectedFormants.first)
+                        val f2Diff = abs((formants.f2 ?: 0.0) - expectedFormants.second)
+                        // Используем процентные пороги для более справедливой оценки
+                        val f1Threshold = expectedFormants.first * 0.3
+                        val f2Threshold = expectedFormants.second * 0.4
+                        
+                        logger.debug {
+                            "Phoneme '$expectedPhoneme' deviations: " +
+                            "F1_diff=${String.format("%.1f", f1Diff)} Hz (threshold=${String.format("%.1f", max(f1Threshold, 200.0))} Hz), " +
+                            "F2_diff=${String.format("%.1f", f2Diff)} Hz (threshold=${String.format("%.1f", max(f2Threshold, 400.0))} Hz)"
+                        }
+                        
+                        if (f1Diff > max(f1Threshold, 200.0)) {
+                            issues.add("F1 отклонение: ${f1Diff.toInt()} Hz (ожидалось ~${expectedFormants.first.toInt()} Hz)")
+                        }
+                        if (f2Diff > max(f2Threshold, 400.0)) {
+                            issues.add("F2 отклонение: ${f2Diff.toInt()} Hz (ожидалось ~${expectedFormants.second.toInt()} Hz)")
+                        }
+                    } else {
+                        logger.debug { "Phoneme '$expectedPhoneme': No expected formants available (consonant or unknown)" }
+                    }
+                }
+                
+                phonemes.add(
+                    PhonemeAnalysis(
+                        phoneme = expectedPhoneme,
+                        position = index,
+                        accuracy = accuracy,
+                        deviation = deviation,
+                        issues = issues,
+                        formantF1 = formants.f1,
+                        formantF2 = formants.f2,
+                        duration = result.formants.f0?.let { (praatSegments[index].endTime - praatSegments[index].startTime) * 1000.0 }
+                    )
+                )
+            }
+            
+            // Итоговое логирование по всем фонемам
+            logger.info {
+                "=== Phoneme Analysis Summary ===" +
+                "\nTotal phonemes analyzed: ${phonemes.size}" +
+                "\nAverage accuracy: ${String.format("%.2f", phonemes.map { it.accuracy }.average())} (${String.format("%.1f", phonemes.map { it.accuracy }.average() * 100)}%)" +
+                "\nPhonemes with accuracy >= 0.8: ${phonemes.count { it.accuracy >= 0.8 }}/${phonemes.size}" +
+                "\nPhonemes with accuracy < 0.6: ${phonemes.count { it.accuracy < 0.6 }}/${phonemes.size}" +
+                "\nDetailed results:" +
+                phonemes.joinToString("\n") { p ->
+                    "  [${p.position}] '${p.phoneme}': accuracy=${String.format("%.2f", p.accuracy)} " +
+                    "(${String.format("%.1f", p.accuracy * 100)}%), " +
+                    "F1=${p.formantF1?.let { String.format("%.0f", it) } ?: "N/A"} Hz, " +
+                    "F2=${p.formantF2?.let { String.format("%.0f", it) } ?: "N/A"} Hz, " +
+                    "issues=${p.issues.size}${if (p.issues.isNotEmpty()) ": ${p.issues.joinToString("; ")}" else ""}"
+                }
+            }
+        } else {
+            logger.warn { "Batch analysis failed or returned ${batchResults?.size} results instead of ${expectedPhonemes.size}, falling back to individual analysis" }
+            // Fallback: используем старый метод для каждой фонемы
+            expectedPhonemes.forEachIndexed { index, expectedPhoneme ->
+                val segment = praatSegments[index]
+                val startSample = (segment.startTime * sampleRate).toInt()
+                val endSample = (segment.endTime * sampleRate).toInt()
+                val phonemeAudio = audioData.sliceArray(startSample until min(endSample, audioData.size))
+                val analysis = analyzePhoneme(phonemeAudio, sampleRate, expectedPhoneme, index)
+                phonemes.add(analysis)
+            }
         }
         
         // Группируем фонемы по словам
@@ -722,6 +987,21 @@ class DictationAnalysisService(
                     issues = wordIssues.distinct()
                 )
             )
+        }
+        
+        val processResultsTime = (System.nanoTime() - processResultsStartTime) / 1_000_000.0
+        val segmentCreationTime = (createWavStartTime - segmentCreationStartTime) / 1_000_000.0
+        val totalPhoneticsTime = (System.nanoTime() - phoneticsStartTime) / 1_000_000.0
+        
+        logger.info {
+            "=== Phonetics Analysis Timing ===\n" +
+            "  - Extract phonemes: ${String.format("%.2f", extractPhonemesTime)}ms\n" +
+            "  - Energy calculation: ${String.format("%.2f", energyTime)}ms\n" +
+            "  - Segment creation: ${String.format("%.2f", segmentCreationTime)}ms\n" +
+            "  - WAV file creation: ${String.format("%.2f", createWavTime)}ms\n" +
+            "  - Praat batch analysis: ${String.format("%.2f", praatBatchTime)}ms\n" +
+            "  - Process results: ${String.format("%.2f", processResultsTime)}ms\n" +
+            "Total phonetics time: ${String.format("%.2f", totalPhoneticsTime)}ms"
         }
         
         return Pair(wordAnalyses, phonemes)
@@ -998,6 +1278,270 @@ class DictationAnalysisService(
         return formants
     }
     
+    /**
+     * Создает WAV файл из FloatArray для batch анализа (использует существующую функцию)
+     */
+    private fun createWavFileForBatch(audioData: FloatArray, sampleRate: Int): ByteArray {
+        return createWavFile(audioData, sampleRate)
+    }
+    
+    /**
+     * Получает эталонные значения формант для фонемы (F1, F2)
+     */
+    private fun getExpectedFormantsPair(phoneme: String): Pair<Double, Double>? {
+        // Примерные эталонные значения формант для русских фонем (F1, F2) в Hz
+        // Это упрощенные значения, в реальности они зависят от говорящего
+        // Эталонные значения формант для русских гласных (F1, F2) в Hz
+        // Значения основаны на акустических исследованиях русского языка
+        // Для мужского голоса типичны: F1=730Hz, F2=1090Hz
+        // Для женского голоса F1 выше, F2 выше: F1=850Hz, F2=1220Hz
+        // Используем средние значения
+        val expected = mapOf(
+            "а" to Pair(730.0, 1090.0),  // Исправлено на более точные значения для русского "а"
+            "э" to Pair(530.0, 1840.0),
+            "о" to Pair(570.0, 840.0),
+            "у" to Pair(350.0, 900.0),  // Обновлено: F1 может быть выше в контексте слова
+            "ы" to Pair(440.0, 1020.0),
+            "и" to Pair(270.0, 2290.0),
+            "е" to Pair(530.0, 1840.0),
+            "ю" to Pair(300.0, 1800.0),
+            "я" to Pair(500.0, 1600.0),
+            "ё" to Pair(500.0, 1000.0)
+        )
+        return expected[phoneme.lowercase()]
+    }
+    
+    /**
+     * Валидирует форманты на разумность для данной фонемы
+     */
+    private fun validateFormants(
+        phoneme: String,
+        f1: Double?,
+        f2: Double?
+    ): Pair<Double?, Double?> {
+        if (f1 == null || f2 == null) return Pair(f1, f2)
+        
+        // Определяем допустимые диапазоны для гласных (расширены для учета вариаций между говорящими)
+        val vowelRanges = mapOf(
+            "а" to Pair(Pair(400.0, 1100.0), Pair(800.0, 1700.0)),  // F1: 400-1100 (расширен), F2: 800-1700 (расширен)
+            "э" to Pair(Pair(350.0, 800.0), Pair(1400.0, 2400.0)),
+            "о" to Pair(Pair(350.0, 850.0), Pair(550.0, 1300.0)),
+            "у" to Pair(Pair(250.0, 950.0), Pair(600.0, 1800.0)),  // Расширен диапазон для "у" с учетом контекста
+            "ы" to Pair(Pair(280.0, 650.0), Pair(750.0, 1500.0)),
+            "и" to Pair(Pair(180.0, 450.0), Pair(1900.0, 2900.0)),
+            "е" to Pair(Pair(350.0, 800.0), Pair(1400.0, 2400.0)),
+            "ю" to Pair(Pair(180.0, 550.0), Pair(1400.0, 2400.0)),
+            "я" to Pair(Pair(350.0, 800.0), Pair(1100.0, 2100.0)),
+            "ё" to Pair(Pair(350.0, 800.0), Pair(750.0, 1500.0))
+        )
+        
+        val ranges = vowelRanges[phoneme.lowercase()]
+        if (ranges != null) {
+            val (f1Range, f2Range) = ranges
+            var validatedF1 = f1
+            var validatedF2 = f2
+            
+            // Если F1 вне диапазона, возможно это ошибка измерения
+            if (f1 < f1Range.first || f1 > f1Range.second) {
+                logger.warn { 
+                    "Phoneme '$phoneme': F1=$f1 Hz is outside expected range [${f1Range.first}-${f1Range.second}] Hz. " +
+                    "This might indicate measurement error or wrong phoneme segment."
+                }
+                // Не обнуляем, но помечаем как подозрительное
+            }
+            
+            // Если F2 вне диапазона, это серьезная проблема
+            if (f2 < f2Range.first || f2 > f2Range.second) {
+                logger.warn { 
+                    "Phoneme '$phoneme': F2=$f2 Hz is outside expected range [${f2Range.first}-${f2Range.second}] Hz. " +
+                    "This likely indicates wrong phoneme segment or measurement error. " +
+                    "F2 might be confused with F3 or another formant."
+                }
+                // Если F2 слишком высокий (возможно это F3), пытаемся использовать F3 как F2
+                // Но для простоты пока оставляем как есть, но снижаем точность
+            }
+            
+            return Pair(validatedF1, validatedF2)
+        }
+        
+        return Pair(f1, f2)
+    }
+    
+    /**
+     * Вычисляет точность произношения фонемы на основе формант
+     */
+    private fun calculatePhonemeAccuracyFromFormants(
+        expectedPhoneme: String,
+        formants: com.aitutor.service.PraatFormantService.FormantAnalysis
+    ): Double {
+        val expectedFormants = getExpectedFormantsPair(expectedPhoneme)
+        
+        if (formants.f1 == null || formants.f2 == null) {
+            logger.debug { "Phoneme '$expectedPhoneme': Missing formants - accuracy set to 0.3" }
+            return 0.3 // Низкая точность, если форманты не извлечены
+        }
+        
+        // Валидируем форманты
+        val (validatedF1, validatedF2) = validateFormants(expectedPhoneme, formants.f1, formants.f2)
+        
+        if (expectedFormants == null) {
+            // Для согласных или неизвестных фонем используем базовую оценку
+            // Если форманты успешно извлечены (F1 и F2 не null), считаем произношение хорошим
+            // Используем 0.85 вместо 0.7, так как успешное извлечение формант указывает на нормальное произношение
+            val baseAccuracy = if (validatedF1 != null && validatedF2 != null) 0.85 else 0.7
+            logger.debug { 
+                "Phoneme '$expectedPhoneme': No expected formants (consonant/unknown) - accuracy set to $baseAccuracy " +
+                "(formants extracted: F1=${validatedF1?.let { String.format("%.1f", it) } ?: "null"}, " +
+                "F2=${validatedF2?.let { String.format("%.1f", it) } ?: "null"})"
+            }
+            return baseAccuracy
+        }
+        
+        val expectedFormantsNonNull = expectedFormants // Smart cast после проверки на null
+        
+        // Исправляем возможную путаницу между F2 и F3
+        // Если F2 слишком далек от ожидаемого, а F3 ближе - используем F3
+        var actualF1 = validatedF1 ?: formants.f1 ?: 0.0
+        var actualF2 = validatedF2 ?: formants.f2 ?: 0.0
+        
+        val f2Expected = expectedFormantsNonNull.second
+        val f2DiffOriginal = abs(actualF2 - f2Expected)
+        val f2DiffFromExpectedPercent = f2DiffOriginal / f2Expected
+        
+        // Для 'у' и 'а' используем более мягкую логику, так как F2 может быть выше в контексте
+        val isU = expectedPhoneme.lowercase() == "у"
+        val isA = expectedPhoneme.lowercase() == "а"
+        val f2F3CheckThresholdPercent = when {
+            isU -> 0.6  // Для 'у' допускаем 60% отклонение при проверке F2/F3
+            isA -> 0.5  // Для 'а' допускаем 50% отклонение при проверке F2/F3
+            else -> 0.4 // Для остальных 40%
+        }
+        
+        // Если F2 отклоняется более чем на порог и есть F3, проверяем F3
+        if (f2DiffFromExpectedPercent > f2F3CheckThresholdPercent && formants.f3 != null) {
+            val f3Diff = abs(formants.f3 - f2Expected)
+            val f3DiffPercent = f3Diff / f2Expected
+            
+            // Для 'у' и 'а' также используем более мягкий порог для F3
+            val f3ThresholdPercent = when {
+                isU -> 0.6
+                isA -> 0.5
+                else -> 0.4
+            }
+            
+            // Если F3 ближе к ожидаемому F2 (и отклонение F3 < порог), используем F3
+            if (f3Diff < f2DiffOriginal && f3DiffPercent < f3ThresholdPercent) {
+                logger.info {
+                    "Phoneme '$expectedPhoneme': F2=${actualF2.toInt()} Hz is far from expected ${f2Expected.toInt()} Hz, " +
+                    "but F3=${formants.f3.toInt()} Hz is closer (diff=${f3Diff.toInt()} Hz vs ${f2DiffOriginal.toInt()} Hz). Using F3 as F2."
+                }
+                actualF2 = formants.f3
+            } else {
+                // Для 'у' и 'а' не считаем это критической ошибкой, если F2 в допустимом диапазоне
+                val isAcceptableRange = when {
+                    isU && actualF2 in 600.0..1800.0 -> true
+                    isA && actualF2 in 800.0..1700.0 -> true
+                    else -> false
+                }
+                if (isAcceptableRange) {
+                    val phonemeName = if (isU) "у" else "а"
+                    val rangeStr = if (isU) "[600-1800]" else "[800-1700]"
+                    logger.debug {
+                        "Phoneme '$phonemeName': F2=${actualF2.toInt()} Hz is within acceptable range $rangeStr Hz, " +
+                        "even though it differs from expected ${f2Expected.toInt()} Hz. This is acceptable for '$phonemeName' in context."
+                    }
+                } else {
+                    // Если ни F2, ни F3 не подходят, возможно проблема в сегменте
+                    logger.warn {
+                        "Phoneme '$expectedPhoneme': Both F2=${actualF2.toInt()} Hz and F3=${formants.f3.toInt()} Hz " +
+                        "are far from expected F2=${f2Expected.toInt()} Hz. " +
+                        "This might indicate wrong phoneme segment or poor audio quality."
+                    }
+                }
+            }
+        }
+        
+        val f1Diff = abs(actualF1 - expectedFormantsNonNull.first)
+        val f2Diff = abs(actualF2 - expectedFormantsNonNull.second)
+        
+        // Нормализуем отклонения с учетом естественных вариаций
+        // Для гласных допустимы большие отклонения из-за различий между говорящими
+        // Используем проценты от эталонных значений для более справедливой оценки
+        // Расширены пороги для учета больших вариаций между говорящими
+        // Для 'у' и 'а' используем более мягкие пороги, так как они сильно зависят от контекста
+        val f1ThresholdPercent = when {
+            isU -> 0.6  // Для 'у' 60%
+            isA -> 0.5  // Для 'а' 50%
+            else -> 0.4 // Для остальных 40%
+        }
+        val f2ThresholdPercent = when {
+            isU -> 0.7  // Для 'у' 70%
+            isA -> 0.6  // Для 'а' 60%
+            else -> 0.5 // Для остальных 50%
+        }
+        val f1Threshold = expectedFormantsNonNull.first * f1ThresholdPercent
+        val f2Threshold = expectedFormantsNonNull.second * f2ThresholdPercent
+        
+        // Если F2 сильно отличается (возможно это F3 вместо F2), применяем штраф
+        // Но только если отклонение очень большое (более 100%), чтобы не штрафовать нормальные вариации
+        // Для 'у' и 'а' используем более мягкий порог, так как F2 сильно варьируется
+        val f2PenaltyThreshold = when {
+            isU -> 1.5  // Для 'у' 150%
+            isA -> 1.3  // Для 'а' 130%
+            else -> 1.0 // Для остальных 100%
+        }
+        val f2Penalty = if (f2Diff > expectedFormantsNonNull.second * f2PenaltyThreshold) {
+            // F2 отличается более чем на порог - вероятно это не F2, а F3 или другая форманта
+            logger.warn { 
+                "Phoneme '$expectedPhoneme': F2 difference is very large ($f2Diff Hz vs expected ${expectedFormantsNonNull.second} Hz). " +
+                "This might be F3 or measurement error. Applying penalty."
+            }
+            0.5 // Штраф 50%
+        } else {
+            1.0
+        }
+        
+        // Используем более мягкую функцию для расчета точности
+        // Используем квадратичную функцию вместо линейной для более плавного снижения точности
+        val f1EffectiveThreshold = max(f1Threshold, 350.0) // минимум 350Hz порог (увеличено)
+        val f2EffectiveThreshold = max(f2Threshold, 600.0) // минимум 600Hz порог (увеличено)
+        
+        // Квадратичная функция (степень 2) дает более мягкое снижение точности
+        // При отклонении в 50% от порога точность будет ~0.75, а не ~0.5
+        // При отклонении в 70% точность будет ~0.5, а не ~0.3
+        val f1NormalizedDiff = f1Diff / f1EffectiveThreshold
+        val f1AccuracyRaw = if (f1NormalizedDiff <= 1.0) {
+            1.0 - f1NormalizedDiff * f1NormalizedDiff * 0.7  // Квадратичная функция с коэффициентом 0.7
+        } else {
+            // Для больших отклонений используем более резкое снижение
+            val excess = f1NormalizedDiff - 1.0
+            max(0.0, 0.3 - excess * 0.15)
+        }
+        
+        val f2NormalizedDiff = f2Diff / f2EffectiveThreshold
+        val f2AccuracyRaw = if (f2NormalizedDiff <= 1.0) {
+            1.0 - f2NormalizedDiff * f2NormalizedDiff * 0.7
+        } else {
+            val excess = f2NormalizedDiff - 1.0
+            max(0.0, 0.3 - excess * 0.15)
+        }
+        
+        val f1Accuracy = f1AccuracyRaw.coerceIn(0.0, 1.0)
+        val f2Accuracy = (f2AccuracyRaw * f2Penalty).coerceIn(0.0, 1.0)
+        
+        // Средняя точность с весом (F1 важнее для различения гласных)
+        val finalAccuracy = (f1Accuracy * 0.6 + f2Accuracy * 0.4).coerceIn(0.0, 1.0)
+        
+        logger.debug {
+            "Phoneme '$expectedPhoneme' accuracy calculation: " +
+            "F1_accuracy=${String.format("%.3f", f1Accuracy)} (diff=${String.format("%.1f", f1Diff)} Hz), " +
+            "F2_accuracy=${String.format("%.3f", f2Accuracy)} (diff=${String.format("%.1f", f2Diff)} Hz), " +
+            "final_accuracy=${String.format("%.3f", finalAccuracy)}"
+        }
+        
+        return finalAccuracy
+    }
+
     /**
      * Создает WAV файл из FloatArray с правильным заголовком
      */

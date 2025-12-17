@@ -24,6 +24,7 @@ class PraatFormantService(
     private val objectMapper: ObjectMapper
 ) {
     private val client = HttpClient.newBuilder()
+        .version(HttpClient.Version.HTTP_1_1) // Явно указываем HTTP/1.1 вместо HTTP/2
         .connectTimeout(Duration.ofSeconds(10))
         .build()
 
@@ -63,6 +64,45 @@ class PraatFormantService(
     )
 
     /**
+     * Сегмент фонемы для пакетного анализа
+     */
+    data class PhonemeSegment(
+        @JsonProperty("phoneme") val phoneme: String,
+        @JsonProperty("start_time") val startTime: Double,
+        @JsonProperty("end_time") val endTime: Double,
+        @JsonProperty("position") val position: Int
+    )
+
+    /**
+     * Результат анализа сегмента
+     */
+    data class PhonemeSegmentResult(
+        @JsonProperty("phoneme") val phoneme: String,
+        @JsonProperty("position") val position: Int,
+        @JsonProperty("formants") val formants: FormantAnalysis
+    )
+
+    /**
+     * Запрос на пакетный анализ
+     */
+    data class BatchPhonemeAnalysisRequest(
+        @JsonProperty("audio_data") val audioData: String,
+        @JsonProperty("audio_format") val audioFormat: String = "wav",
+        @JsonProperty("segments") val segments: List<PhonemeSegment>
+    )
+
+    /**
+     * Ответ на пакетный анализ
+     */
+    data class BatchPhonemeAnalysisResponse(
+        @JsonProperty("success") val success: Boolean,
+        @JsonProperty("results") val results: List<PhonemeSegmentResult>,
+        @JsonProperty("sample_rate") val sampleRate: Int,
+        @JsonProperty("duration") val duration: Double,
+        @JsonProperty("message") val message: String? = null
+    )
+
+    /**
      * Анализирует фонему используя Praat через Python-сервис
      *
      * @param audioBytes Аудио данные
@@ -79,6 +119,12 @@ class PraatFormantService(
     ): FormantAnalysis? = withContext(Dispatchers.IO) {
         try {
             val base64Audio = java.util.Base64.getEncoder().encodeToString(audioBytes)
+            logger.debug { "Encoded audio to base64: ${audioBytes.size} bytes -> ${base64Audio.length} chars" }
+            
+            // Проверяем размер данных
+            if (base64Audio.length > 10_000_000) { // ~10MB
+                logger.warn { "Base64 audio data is very large: ${base64Audio.length} chars, may cause issues" }
+            }
             
             val request = PhonemeAnalysisRequest(
                 audioData = base64Audio,
@@ -88,29 +134,55 @@ class PraatFormantService(
                 endTime = endTime
             )
 
-            val jsonRequest = objectMapper.writeValueAsString(request)
+            val jsonRequest = try {
+                objectMapper.writeValueAsString(request)
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to serialize request to JSON" }
+                return@withContext null
+            }
             
-            logger.debug { 
+            logger.debug { "Serialized JSON: ${jsonRequest.length} chars" }
+            
+            logger.info { 
                 "Sending request to Praat service for phoneme '$phoneme': " +
                 "audioData length=${request.audioData.length}, " +
                 "audioFormat=${request.audioFormat}, " +
                 "startTime=${request.startTime}, endTime=${request.endTime}, " +
-                "JSON length=${jsonRequest.length}, " +
-                "JSON preview=${jsonRequest.take(200)}"
+                "JSON length=${jsonRequest.length}"
             }
 
-            // Создаем тело запроса как ByteArray для надежности
-            val requestBody = jsonRequest.toByteArray(Charsets.UTF_8)
+            val requestBytes = jsonRequest.toByteArray(Charsets.UTF_8)
+            logger.info { "Request bytes: ${requestBytes.size} bytes, first 100 bytes: ${requestBytes.take(100).joinToString(" ") { "%02X".format(it) }}" }
             
-            val httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create("$serviceUrl/analyze-phoneme"))
-                .header("Content-Type", "application/json; charset=utf-8")
-                .header("Content-Length", requestBody.size.toString())
-                .timeout(Duration.ofSeconds(30))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(requestBody))
-                .build()
+            // Проверяем, что данные не пустые
+            if (requestBytes.isEmpty()) {
+                logger.error { "Request bytes are empty! JSON length was ${jsonRequest.length}" }
+                return@withContext null
+            }
+            
+            val httpRequest = try {
+                HttpRequest.newBuilder()
+                    .uri(URI.create("$serviceUrl/analyze-phoneme"))
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .timeout(Duration.ofSeconds(60))
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(requestBytes))
+                    .build()
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to create HTTP request: ${e.message}" }
+                return@withContext null
+            }
+            
+            logger.info { "HTTP request created successfully, sending ${requestBytes.size} bytes to $serviceUrl/analyze-phoneme" }
 
-            val response = client.send(httpRequest, HttpResponse.BodyHandlers.ofString())
+            val response = try {
+                val resp = client.send(httpRequest, HttpResponse.BodyHandlers.ofString())
+                logger.debug { "Response received: status=${resp.statusCode()}, body length=${resp.body().length}" }
+                resp
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to send HTTP request: ${e.message}, cause: ${e.cause?.message}" }
+                e.printStackTrace()
+                return@withContext null
+            }
             
             if (response.statusCode() != 200) {
                 val errorBody = response.body()
@@ -147,6 +219,77 @@ class PraatFormantService(
         }
     }
 
+
+    /**
+     * Анализирует несколько фонем за один запрос (эффективнее чем отдельные запросы)
+     *
+     * @param audioBytes Аудио данные (весь файл)
+     * @param segments Список сегментов для анализа
+     * @return Результаты анализа для каждого сегмента или null в случае ошибки
+     */
+    suspend fun analyzePhonemesBatch(
+        audioBytes: ByteArray,
+        segments: List<PhonemeSegment>
+    ): List<PhonemeSegmentResult>? = withContext(Dispatchers.IO) {
+        try {
+            val base64Audio = java.util.Base64.getEncoder().encodeToString(audioBytes)
+            logger.debug { "Batch analysis: ${segments.size} segments, audio size=${audioBytes.size} bytes" }
+            
+            val request = BatchPhonemeAnalysisRequest(
+                audioData = base64Audio,
+                audioFormat = "wav",
+                segments = segments
+            )
+
+            val jsonRequest = try {
+                objectMapper.writeValueAsString(request)
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to serialize batch request to JSON" }
+                return@withContext null
+            }
+            
+            val requestBytes = jsonRequest.toByteArray(Charsets.UTF_8)
+            logger.info { "Sending batch request: ${segments.size} segments, ${requestBytes.size} bytes" }
+            
+            val httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create("$serviceUrl/analyze-phonemes-batch"))
+                .header("Content-Type", "application/json; charset=utf-8")
+                .timeout(Duration.ofSeconds(60))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(requestBytes))
+                .build()
+
+            val response = try {
+                client.send(httpRequest, HttpResponse.BodyHandlers.ofString())
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to send batch HTTP request: ${e.message}" }
+                return@withContext null
+            }
+            
+            if (response.statusCode() != 200) {
+                logger.warn { "Batch request returned status ${response.statusCode()}: ${response.body()}" }
+                return@withContext null
+            }
+
+            val batchResponse = try {
+                objectMapper.readValue(response.body(), BatchPhonemeAnalysisResponse::class.java)
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to parse batch response: ${e.message}" }
+                return@withContext null
+            }
+            
+            if (!batchResponse.success) {
+                logger.warn { "Batch analysis failed: ${batchResponse.message}" }
+                return@withContext null
+            }
+
+            logger.info { "Batch analysis completed: ${batchResponse.results.size} results" }
+            batchResponse.results
+
+        } catch (e: Exception) {
+            logger.error(e) { "Error calling batch Praat service: ${e.message}" }
+            null
+        }
+    }
 
     /**
      * Проверяет доступность Python-сервиса
