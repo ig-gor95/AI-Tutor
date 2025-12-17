@@ -86,7 +86,31 @@ class RussianPhoneticAnalyzer {
                 char in "аеёиоуыэюя" -> {
                     val phoneme = when (char) {
                         'а' -> "а"
-                        'е' -> if (prevChar == null || isHardConsonant(prevChar)) "э" else "е"
+                        'е' -> {
+                            when {
+                                prevChar == null -> {
+                                    // В начале слова: "е" → "й" + "э" (две фонемы)
+                                    phonemes.add("й")
+                                    "э"
+                                }
+                                prevChar != null && isConsonant(prevChar) -> {
+                                    // После согласной: проверяем, мягкая ли она
+                                    val prevPhoneme = if (phonemes.isNotEmpty()) phonemes.last() else null
+                                    if (prevPhoneme != null && prevPhoneme.endsWith("'")) {
+                                        "е"  // Предыдущая согласная мягкая
+                                    } else if (isHardConsonant(prevChar)) {
+                                        "э"  // Ж, Ш, Ц всегда твердые
+                                    } else {
+                                        "э"  // После твердых согласных "е" → "э"
+                                    }
+                                }
+                                else -> {
+                                    // После гласной: "е" → "й" + "э" (две фонемы)
+                                    phonemes.add("й")
+                                    "э"
+                                }
+                            }
+                        }
                         'ё' -> "о" // Всегда ударная, но для упрощения используем "о"
                         'и' -> {
                             // После твердых согласных "и" произносится как "ы"
@@ -117,8 +141,50 @@ class RussianPhoneticAnalyzer {
                         'у' -> "у"
                         'ы' -> "ы"
                         'э' -> "э"
-                        'ю' -> if (prevChar == null || isHardConsonant(prevChar)) "у" else "ю"
-                        'я' -> if (prevChar == null || isHardConsonant(prevChar)) "а" else "я"
+                        'ю' -> {
+                            when {
+                                prevChar == null -> {
+                                    // В начале слова: "ю" → "й" + "у" (две фонемы)
+                                    phonemes.add("й")
+                                    "у"
+                                }
+                                isHardConsonant(prevChar) -> {
+                                    // После ж, ш, ц: "ю" → "у"
+                                    "у"
+                                }
+                                prevChar != null && isConsonant(prevChar) -> {
+                                    // После твердой согласной: "ю" → "у"
+                                    "у"
+                                }
+                                else -> {
+                                    // После гласной: "ю" → "й" + "у" (две фонемы)
+                                    phonemes.add("й")
+                                    "у"
+                                }
+                            }
+                        }
+                        'я' -> {
+                            when {
+                                prevChar == null -> {
+                                    // В начале слова: "я" → "й" + "а" (две фонемы)
+                                    phonemes.add("й")
+                                    "а"
+                                }
+                                isHardConsonant(prevChar) -> {
+                                    // После ж, ш, ц: "я" → "а"
+                                    "а"
+                                }
+                                prevChar != null && isConsonant(prevChar) -> {
+                                    // После твердой согласной: "я" → "а"
+                                    "а"
+                                }
+                                else -> {
+                                    // После гласной: "я" → "й" + "а" (две фонемы)
+                                    phonemes.add("й")
+                                    "а"
+                                }
+                            }
+                        }
                         else -> char.toString()
                     }
                     phonemes.add(phoneme)

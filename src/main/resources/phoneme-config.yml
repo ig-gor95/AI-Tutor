@@ -1,0 +1,185 @@
+phonemes:
+  # Гласные
+  а:
+    expected:
+      f1: 730.0
+      f2: 1090.0
+    validation:
+      f1:
+        min: 500.0
+        max: 1000.0
+      f2:
+        min: 800.0
+        max: 1700.0
+    thresholds:
+      f1: 0.5  # 50%
+      f2: 0.6  # 60%
+      f2F3Check: 0.5  # 50%
+      f2Penalty: 1.3  # 130%
+    acceptableRange:
+      f1:
+        min: 500.0
+        max: 1000.0
+      f2:
+        min: 800.0
+        max: 1700.0
+      minAccuracy: 0.0  # Не используется для 'а'
+
+  э:
+    expected:
+      f1: 650.0
+      f2: 1800.0
+    validation:
+      f1:
+        min: 450.0
+        max: 900.0
+      f2:
+        min: 1200.0
+        max: 2400.0
+    thresholds:
+      f1: 0.5  # 50%
+      f2: 0.6  # 60%
+      f2F3Check: 0.5  # 50%
+      f2Penalty: 1.3  # 130%
+    acceptableRange:
+      f1:
+        min: 450.0
+        max: 900.0
+      f2:
+        min: 1200.0
+        max: 2400.0
+      minAccuracy: 0.0
+
+  и:
+    expected:
+      f1: 400.0
+      f2: 2100.0
+    validation:
+      f1:
+        min: 250.0
+        max: 700.0
+      f2:
+        min: 1700.0
+        max: 2900.0
+    thresholds:
+      f1: 0.5  # 50%
+      f2: 0.5  # 50%
+      f2F3Check: 0.5  # 50%
+      f2Penalty: 1.2  # 120%
+    acceptableRange:
+      f1:
+        min: 250.0
+        max: 700.0
+      f2:
+        min: 1700.0
+        max: 2900.0
+      minAccuracy: 0.0
+
+  о:
+    expected:
+      f1: 550.0
+      f2: 1000.0
+    validation:
+      f1:
+        min: 140.0  # Расширен минимум для учета редукции (было 250.0)
+        max: 1100.0
+      f2:
+        min: 600.0
+        max: 2200.0
+    thresholds:
+      f1: 0.65  # 65%
+      f2: 0.65  # 65%
+      f2F3Check: 0.5  # 50%
+      f2Penalty: 1.4  # 140%
+    acceptableRange:
+      f1:
+        min: 140.0  # Расширен минимум для учета редукции (было 250.0)
+        max: 1100.0
+      f2:
+        min: 600.0
+        max: 2200.0
+      minAccuracy: 0.7  # Минимальная точность, если в допустимом диапазоне
+
+  у:
+    expected:
+      f1: 350.0
+      f2: 900.0
+    validation:
+      f1:
+        min: 250.0
+        max: 1000.0
+      f2:
+        min: 600.0
+        max: 1800.0
+    thresholds:
+      f1: 0.6  # 60%
+      f2: 0.7  # 70%
+      f2F3Check: 0.6  # 60%
+      f2Penalty: 1.5  # 150%
+    acceptableRange:
+      f1:
+        min: 250.0
+        max: 1000.0
+      f2:
+        min: 600.0
+        max: 1800.0
+      minAccuracy: 0.0
+
+  ы:
+    expected:
+      f1: 500.0
+      f2: 1200.0
+    validation:
+      f1:
+        min: 350.0
+        max: 750.0
+      f2:
+        min: 900.0
+        max: 1800.0
+    thresholds:
+      f1: 0.5  # 50%
+      f2: 0.6  # 60%
+      f2F3Check: 0.5  # 50%
+      f2Penalty: 1.3  # 130%
+    acceptableRange:
+      f1:
+        min: 350.0
+        max: 750.0
+      f2:
+        min: 900.0
+        max: 1800.0
+      minAccuracy: 0.0
+
+  е:
+    # 'е' использует те же настройки что и 'э'
+    expected:
+      f1: 530.0
+      f2: 1840.0
+    validation:
+      f1:
+        min: 350.0
+        max: 800.0
+      f2:
+        min: 1400.0
+        max: 2400.0
+    thresholds:
+      f1: 0.5  # 50%
+      f2: 0.6  # 60%
+      f2F3Check: 0.5  # 50%
+      f2Penalty: 1.3  # 130%
+    acceptableRange:
+      f1:
+        min: 350.0
+        max: 800.0
+      f2:
+        min: 1200.0
+        max: 2400.0
+      minAccuracy: 0.0
+
+# Настройки по умолчанию для согласных и неизвестных фонем
+defaults:
+  consonant:
+    accuracy: 0.85
+  unknown:
+    accuracy: 0.3
+
