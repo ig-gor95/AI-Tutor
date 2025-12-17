@@ -66,7 +66,20 @@ class DictationAnalysisService(
             val audioInputStream = when (request.audioFormat.lowercase()) {
                 "wav" -> {
                     logger.debug { "Creating AudioInputStream for WAV format" }
-                    AudioSystem.getAudioInputStream(audioStream)
+                    try {
+                        val ais = AudioSystem.getAudioInputStream(audioStream)
+                        val format = ais.format
+                        logger.info { 
+                            "AudioSystem format detected: sampleRate=${format.sampleRate}, " +
+                            "channels=${format.channels}, bitsPerSample=${format.sampleSizeInBits}, " +
+                            "encoding=${format.encoding}, frameLength=${ais.frameLength}, " +
+                            "frameSize=${format.frameSize}, bigEndian=${format.isBigEndian}"
+                        }
+                        ais
+                    } catch (e: Exception) {
+                        logger.error(e) { "Failed to create AudioInputStream from WAV: ${e.message}" }
+                        throw IllegalArgumentException("Invalid WAV file format: ${e.message}", e)
+                    }
                 }
                 "mp3" -> {
                     logger.debug { "Creating AudioInputStream for MP3 format" }
@@ -218,6 +231,16 @@ class DictationAnalysisService(
                 break
             }
             totalRead += bytesRead
+            
+            // Логируем первые несколько чтений для отладки
+            if (totalRead <= 100 && bytesRead > 0) {
+                val recentBytes = buffer.sliceArray((totalRead - bytesRead).coerceAtLeast(0) until totalRead)
+                val nonZeroInRecent = recentBytes.count { it != 0.toByte() }
+                logger.debug { 
+                    "Read $bytesRead bytes (total: $totalRead), " +
+                    "non-zero in this chunk: $nonZeroInRecent/$bytesRead"
+                }
+            }
         }
         
         logger.info { "Read $totalRead bytes from audio stream (expected $totalBytes)" }
@@ -1329,7 +1352,7 @@ class DictationAnalysisService(
             "э" to Pair(650.0, 1800.0),  // Обновлено: F1 выше в реальной речи (было 530)
             "о" to Pair(570.0, 900.0),   // Обновлено: F2 может быть выше (было 840)
             "у" to Pair(350.0, 900.0),  // Обновлено: F1 может быть выше в контексте слова
-            "ы" to Pair(440.0, 1020.0),
+            "ы" to Pair(500.0, 1200.0),  // Обновлено: F1 и F2 выше в реальной речи (было 440, 1020)
             "и" to Pair(400.0, 2100.0),  // Обновлено: F1 выше в реальной речи (было 270)
             "е" to Pair(530.0, 1840.0),
             "ю" to Pair(300.0, 1800.0),
@@ -1355,7 +1378,7 @@ class DictationAnalysisService(
             "э" to Pair(Pair(450.0, 900.0), Pair(1200.0, 2400.0)),  // Расширен F1 диапазон (было 350-800)
             "о" to Pair(Pair(350.0, 900.0), Pair(600.0, 2200.0)),   // Расширен F2 диапазон для "о" (было 550-1300)
             "у" to Pair(Pair(250.0, 1000.0), Pair(600.0, 1800.0)),  // Расширен F1 диапазон для "у" (было 250-950)
-            "ы" to Pair(Pair(280.0, 650.0), Pair(750.0, 1500.0)),
+            "ы" to Pair(Pair(350.0, 750.0), Pair(900.0, 1800.0)),  // Расширен диапазон для "ы" (было 280-650, 750-1500)
             "и" to Pair(Pair(250.0, 700.0), Pair(1700.0, 2900.0)),  // Расширен F1 диапазон для "и" (было 180-450)
             "е" to Pair(Pair(350.0, 800.0), Pair(1400.0, 2400.0)),
             "ю" to Pair(Pair(180.0, 550.0), Pair(1400.0, 2400.0)),
@@ -1436,19 +1459,20 @@ class DictationAnalysisService(
         val f2DiffOriginal = abs(actualF2 - f2Expected)
         val f2DiffFromExpectedPercent = f2DiffOriginal / f2Expected
         
-        // Для 'у', 'а', 'э', 'и', 'о' используем более мягкую логику, так как они сильно зависят от контекста
+        // Для 'у', 'а', 'э', 'и', 'о', 'ы' используем более мягкую логику, так как они сильно зависят от контекста
         val phoneme = expectedPhoneme.lowercase()
         val isU = phoneme == "у"
         val isA = phoneme == "а"
         val isE = phoneme == "э" || phoneme == "е"
         val isI = phoneme == "и"
         val isO = phoneme == "о"
-        val isContextualVowel = isU || isA || isE || isI || isO
+        val isY = phoneme == "ы"
+        val isContextualVowel = isU || isA || isE || isI || isO || isY
         
         val f2F3CheckThresholdPercent = when {
             isU -> 0.6  // Для 'у' допускаем 60% отклонение при проверке F2/F3
             isA || isE -> 0.5  // Для 'а' и 'э' допускаем 50% отклонение
-            isI || isO -> 0.5  // Для 'и' и 'о' допускаем 50% отклонение
+            isI || isO || isY -> 0.5  // Для 'и', 'о', 'ы' допускаем 50% отклонение
             else -> 0.4 // Для остальных 40%
         }
         
@@ -1461,7 +1485,7 @@ class DictationAnalysisService(
             val f3ThresholdPercent = when {
                 isU -> 0.6
                 isA || isE -> 0.5
-                isI || isO -> 0.5
+                isI || isO || isY -> 0.5
                 else -> 0.4
             }
             
@@ -1480,6 +1504,7 @@ class DictationAnalysisService(
                     isE && actualF2 in 1200.0..2400.0 -> Triple(true, "э", "[1200-2400]")
                     isO && actualF2 in 600.0..2200.0 -> Triple(true, "о", "[600-2200]")
                     isI && actualF2 in 1700.0..2900.0 -> Triple(true, "и", "[1700-2900]")
+                    isY && actualF2 in 900.0..1800.0 -> Triple(true, "ы", "[900-1800]")
                     else -> Triple(false, phoneme, "")
                 }
                 if (isAcceptableRange) {
@@ -1509,13 +1534,13 @@ class DictationAnalysisService(
         val f1ThresholdPercent = when {
             isU -> 0.6  // Для 'у' 60%
             isA || isE -> 0.5  // Для 'а' и 'э' 50%
-            isI || isO -> 0.5  // Для 'и' и 'о' 50%
+            isI || isO || isY -> 0.5  // Для 'и', 'о', 'ы' 50%
             else -> 0.4 // Для остальных 40%
         }
         val f2ThresholdPercent = when {
             isU -> 0.7  // Для 'у' 70%
             isA -> 0.6  // Для 'а' 60%
-            isE || isO -> 0.6  // Для 'э' и 'о' 60%
+            isE || isO || isY -> 0.6  // Для 'э', 'о', 'ы' 60%
             isI -> 0.5  // Для 'и' 50%
             else -> 0.5 // Для остальных 50%
         }
@@ -1528,7 +1553,7 @@ class DictationAnalysisService(
         val f2PenaltyThreshold = when {
             isU -> 1.5  // Для 'у' 150%
             isA -> 1.3  // Для 'а' 130%
-            isE || isO -> 1.3  // Для 'э' и 'о' 130%
+            isE || isO || isY -> 1.3  // Для 'э', 'о', 'ы' 130%
             isI -> 1.2  // Для 'и' 120%
             else -> 1.0 // Для остальных 100%
         }
