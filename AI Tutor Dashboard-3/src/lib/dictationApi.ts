@@ -55,6 +55,7 @@ export interface ArticulationAnalysis {
 export interface DictationAnalysisResponse {
   success: boolean;
   overallAccuracy: number;
+  transcribedText: string; // Транскрибированный текст из аудио
   words: WordAnalysis[];
   phonemes: PhonemeAnalysis[];
   intonation: IntonationAnalysis;

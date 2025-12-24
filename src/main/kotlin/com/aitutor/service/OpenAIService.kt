@@ -7,9 +7,13 @@ import com.aitutor.model.entity.Personality
 import com.theokanning.openai.completion.chat.ChatCompletionRequest
 import com.theokanning.openai.completion.chat.ChatMessage
 import com.theokanning.openai.service.OpenAiService
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.time.Duration
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.charset.StandardCharsets
 
 @Service
 class OpenAIService(
@@ -42,6 +46,8 @@ class OpenAIService(
             OpenAiService(apiKey, Duration.ofSeconds(timeoutSeconds.toLong()))
         }
     }
+    
+    private val objectMapper = ObjectMapper()
     
     private fun requireOpenAIService(): OpenAiService {
         return openAiService ?: throw IllegalStateException(
@@ -371,6 +377,73 @@ class OpenAIService(
         val score = scoreMatch?.groupValues?.get(1)?.toIntOrNull() ?: 75
         
         return Pair(feedback, score.coerceIn(0, 100))
+    }
+    
+    /**
+     * Транскрибирует аудио в текст используя OpenAI Whisper API
+     * @param audioBytes байты аудиофайла
+     * @param audioFormat формат аудио (wav, mp3, webm и т.д.)
+     * @param language язык для транскрипции (ru, en и т.д.)
+     * @return транскрибированный текст
+     */
+    suspend fun transcribeAudio(audioBytes: ByteArray, audioFormat: String, language: String = "ru"): String {
+        try {
+            if (apiKey.isBlank() || apiKey == "your-openai-api-key") {
+                throw IllegalStateException("OpenAI API key not configured")
+            }
+            
+            val url = URL("https://api.openai.com/v1/audio/transcriptions")
+            val connection = url.openConnection() as HttpURLConnection
+            
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Authorization", "Bearer $apiKey")
+            connection.doOutput = true
+            
+            // Создаем multipart/form-data запрос
+            val boundary = "----WebKitFormBoundary${System.currentTimeMillis()}"
+            connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            
+            connection.outputStream.use { os ->
+                // Отправляем файл
+                os.write("--$boundary\r\n".toByteArray())
+                os.write("Content-Disposition: form-data; name=\"file\"; filename=\"audio.$audioFormat\"\r\n".toByteArray())
+                os.write("Content-Type: audio/$audioFormat\r\n\r\n".toByteArray())
+                os.write(audioBytes)
+                os.write("\r\n".toByteArray())
+                
+                // Отправляем model
+                os.write("--$boundary\r\n".toByteArray())
+                os.write("Content-Disposition: form-data; name=\"model\"\r\n\r\n".toByteArray())
+                os.write("whisper-1\r\n".toByteArray())
+                
+                // Отправляем language, если указан
+                if (language.isNotBlank()) {
+                    os.write("--$boundary\r\n".toByteArray())
+                    os.write("Content-Disposition: form-data; name=\"language\"\r\n\r\n".toByteArray())
+                    os.write("$language\r\n".toByteArray())
+                }
+                
+                // Отправляем response_format
+                os.write("--$boundary\r\n".toByteArray())
+                os.write("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n".toByteArray())
+                os.write("text\r\n".toByteArray())
+                
+                os.write("--$boundary--\r\n".toByteArray())
+            }
+            
+            val responseCode = connection.responseCode
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                val error = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown error"
+                throw RuntimeException("OpenAI Whisper API error: $responseCode - $error")
+            }
+            
+            val responseText = connection.inputStream.bufferedReader().use { it.readText() }
+            return responseText.trim()
+        } catch (e: Exception) {
+            println("OpenAI Whisper transcription error: ${e.message}")
+            e.printStackTrace()
+            throw RuntimeException("Ошибка при транскрипции аудио: ${e.message}", e)
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Play, BarChart3, Volume2, TrendingUp, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { analyzeDictation, DictationAnalysisResponse, WordAnalysis, PhonemeAnalysis } from '@/lib/dictationApi';
+import { SpeechToText } from '@/lib/speechToText';
 
 // Lazy load Chart.js to avoid blocking render
 let ChartJS: any = null;
@@ -36,14 +37,16 @@ interface DictationAnalysisProps {
 export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [expectedText, setExpectedText] = useState('Стакан');
+  const [transcribedText, setTranscribedText] = useState<string>('');
   const [analysis, setAnalysis] = useState<DictationAnalysisResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const speechToTextRef = useRef<SpeechToText | null>(null);
 
   // Очистка URL при размонтировании
   useEffect(() => {
@@ -62,21 +65,30 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
       });
 
       chunksRef.current = [];
-      
+      setTranscribedText(''); // Сбрасываем предыдущий текст
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
         }
       };
 
-      mediaRecorder.onstop = () => {
+      mediaRecorder.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         setAudioBlob(blob);
         const url = URL.createObjectURL(blob);
         setAudioUrl(url);
-        
+
         // Останавливаем все треки потока
         stream.getTracks().forEach(track => track.stop());
+
+        // Останавливаем распознавание речи
+        if (speechToTextRef.current) {
+          speechToTextRef.current.stop();
+        }
+
+        // Автоматически запускаем анализ после остановки записи
+        await analyzeRecording(blob);
       };
 
       mediaRecorderRef.current = mediaRecorder;
@@ -84,6 +96,27 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
       setIsRecording(true);
       setError(null);
       setAnalysis(null);
+
+      // Запускаем распознавание речи параллельно с записью
+      try {
+        if (!speechToTextRef.current) {
+          speechToTextRef.current = new SpeechToText('ru');
+        }
+
+        speechToTextRef.current.start(
+          (text) => {
+            console.log('Transcribed:', text);
+            setTranscribedText(text);
+          },
+          (error) => {
+            console.warn('Speech recognition error:', error);
+            // Не показываем ошибку пользователю, так как это не критично
+          }
+        );
+      } catch (speechErr) {
+        console.warn('Failed to start speech recognition:', speechErr);
+        // Продолжаем запись даже если распознавание не удалось
+      }
     } catch (err) {
       setError('Не удалось получить доступ к микрофону');
       console.error('Error accessing microphone:', err);
@@ -100,16 +133,53 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
   // Конвертация WebM в WAV
   const convertWebmToWav = async (webmBlob: Blob): Promise<Blob> => {
     try {
+      console.log('[WebM→WAV] Starting conversion. WebM blob size:', webmBlob.size, 'bytes');
+
       const arrayBuffer = await webmBlob.arrayBuffer();
+      console.log('[WebM→WAV] ArrayBuffer size:', arrayBuffer.byteLength, 'bytes');
+
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      console.log('[WebM→WAV] AudioContext created. Sample rate:', audioContext.sampleRate);
+
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      
+      console.log('[WebM→WAV] AudioBuffer decoded:', {
+        duration: audioBuffer.duration,
+        length: audioBuffer.length,
+        numberOfChannels: audioBuffer.numberOfChannels,
+        sampleRate: audioBuffer.sampleRate
+      });
+
+      // Проверяем, есть ли данные в буфере
+      const channelData = audioBuffer.getChannelData(0);
+
+      // Используем reduce вместо spread operator для избежания stack overflow
+      let nonZeroCount = 0;
+      let maxAmplitude = 0;
+      for (let i = 0; i < channelData.length; i++) {
+        const absValue = Math.abs(channelData[i]);
+        if (absValue > 0.0001) nonZeroCount++;
+        if (absValue > maxAmplitude) maxAmplitude = absValue;
+      }
+
+      console.log('[WebM→WAV] Channel data analysis:', {
+        totalSamples: channelData.length,
+        nonZeroSamples: nonZeroCount,
+        maxAmplitude: maxAmplitude,
+        first10Samples: Array.from(channelData.slice(0, 10))
+      });
+
+      if (maxAmplitude < 0.0001) {
+        throw new Error('Аудио буфер содержит только тишину. Проверьте, работает ли микрофон.');
+      }
+
       // Конвертируем AudioBuffer в WAV
       const wav = audioBufferToWav(audioBuffer);
+      console.log('[WebM→WAV] WAV created. Size:', wav.byteLength, 'bytes');
+
       return new Blob([wav], { type: 'audio/wav' });
     } catch (error) {
-      console.error('Error converting WebM to WAV:', error);
-      throw new Error('Не удалось конвертировать аудио в WAV формат');
+      console.error('[WebM→WAV] Error converting WebM to WAV:', error);
+      throw new Error('Не удалось конвертировать аудио в WAV формат: ' + (error as Error).message);
     }
   };
 
@@ -123,17 +193,25 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
     const byteRate = sampleRate * blockAlign;
     const dataSize = length * blockAlign;
     const bufferSize = 44 + dataSize;
-    
+
+    console.log('[audioBufferToWav] Creating WAV file:', {
+      length,
+      numberOfChannels,
+      sampleRate,
+      dataSize,
+      bufferSize
+    });
+
     const arrayBuffer = new ArrayBuffer(bufferSize);
     const view = new DataView(arrayBuffer);
-    
+
     // WAV заголовок
     const writeString = (offset: number, string: string) => {
       for (let i = 0; i < string.length; i++) {
         view.setUint8(offset + i, string.charCodeAt(i));
       }
     };
-    
+
     writeString(0, 'RIFF');
     view.setUint32(4, bufferSize - 8, true);
     writeString(8, 'WAVE');
@@ -147,52 +225,66 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
     view.setUint16(34, 16, true); // bits per sample
     writeString(36, 'data');
     view.setUint32(40, dataSize, true);
-    
+
     // Записываем аудио данные
     let offset = 44;
+    let writtenNonZeroSamples = 0;
+    const channelData = buffer.getChannelData(0);
+
     for (let i = 0; i < length; i++) {
       for (let channel = 0; channel < numberOfChannels; channel++) {
         const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+        const int16Sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+        view.setInt16(offset, int16Sample, true);
+
+        if (Math.abs(int16Sample) > 10) writtenNonZeroSamples++;
+
+        // Логируем первые 10 сэмплов
+        if (i < 10 && channel === 0) {
+          console.log(`[audioBufferToWav] Sample ${i}: float=${sample.toFixed(6)}, int16=${int16Sample}`);
+        }
+
         offset += 2;
       }
     }
-    
+
+    console.log('[audioBufferToWav] WAV data written:', {
+      totalSamples: length,
+      writtenNonZeroSamples,
+      firstSample: channelData[0],
+      maxSample: Math.max(...Array.from(channelData.slice(0, 1000)).map(Math.abs))
+    });
+
     return arrayBuffer;
   };
 
-  const handleAnalyze = async () => {
-    if (!audioBlob) {
-      setError('Сначала запишите аудио');
-      return;
-    }
-
-    if (!expectedText.trim()) {
-      setError('Введите текст для анализа');
-      return;
-    }
-
+  // Новая функция для автоматического анализа после записи
+  const analyzeRecording = async (blob: Blob) => {
     setIsAnalyzing(true);
+    setIsTranscribing(true);
     setError(null);
 
     try {
       let file: File;
-      const isWebm = audioBlob.type.includes('webm');
-      
+      const isWebm = blob.type.includes('webm');
+
       if (isWebm) {
         // Конвертируем WebM в WAV
-        const wavBlob = await convertWebmToWav(audioBlob);
+        const wavBlob = await convertWebmToWav(blob);
         file = new File([wavBlob], 'recording.wav', { type: 'audio/wav' });
       } else {
         // Используем исходный файл
-        file = new File([audioBlob], 'recording.wav', { type: audioBlob.type });
+        file = new File([blob], 'recording.wav', { type: blob.type });
       }
-      
-      const result = await analyzeDictation(file, expectedText, 'ru');
+
+      // Отправляем пустую строку как expectedText - backend сам сделает транскрибацию
+      const result = await analyzeDictation(file, '', 'ru');
       setAnalysis(result);
+      setIsTranscribing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка при анализе');
       console.error('Analysis error:', err);
+      setIsTranscribing(false);
     } finally {
       setIsAnalyzing(false);
     }
@@ -323,27 +415,19 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
             )}
           </div>
 
-          {/* Ввод текста */}
           <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Текст для произношения:
-            </label>
-            <input
-              type="text"
-              value={expectedText}
-              onChange={(e) => setExpectedText(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Введите текст для произношения"
-            />
+            <p className="text-sm text-gray-600 mb-4">
+              Нажмите кнопку записи, чтобы начать. После остановки записи автоматически выполнится транскрибация и анализ дикции.
+            </p>
           </div>
 
           {/* Запись */}
           <div className="mb-6 flex items-center gap-4 flex-wrap">
-            {!isRecording ? (
+            {!isRecording && !isAnalyzing ? (
               <button
                 onClick={startRecording}
                 className="flex items-center gap-2 px-6 py-3 text-white rounded-lg transition-colors shadow-lg font-semibold text-base"
-                style={{ 
+                style={{
                   backgroundColor: '#ef4444',
                   border: 'none',
                   cursor: 'pointer'
@@ -354,50 +438,38 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
                 <Mic className="w-5 h-5" />
                 <span>Начать запись</span>
               </button>
-            ) : (
+            ) : isRecording ? (
               <button
                 onClick={stopRecording}
-                className="flex items-center gap-2 px-6 py-3 text-white rounded-lg transition-colors shadow-lg font-semibold text-base"
-                style={{ 
-                  backgroundColor: '#6b7280',
+                className="flex items-center gap-2 px-6 py-3 text-white rounded-lg transition-colors shadow-lg font-semibold text-base animate-pulse"
+                style={{
+                  backgroundColor: '#ef4444',
                   border: 'none',
                   cursor: 'pointer'
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#4b5563'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#6b7280'}
               >
                 <Square className="w-5 h-5" />
                 <span>Остановить запись</span>
               </button>
-            )}
+            ) : null}
 
-            {audioUrl && (
+            {audioUrl && !isAnalyzing && (
               <div className="flex items-center gap-2">
                 <audio controls src={audioUrl} className="h-10" />
               </div>
             )}
 
-            {audioBlob && !isAnalyzing && (
-              <button
-                onClick={handleAnalyze}
-                className="flex items-center gap-2 px-6 py-3 text-white rounded-lg transition-colors shadow-lg font-semibold text-base"
-                style={{ 
-                  backgroundColor: '#3b82f6',
-                  border: 'none',
-                  cursor: 'pointer'
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#2563eb'}
-                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#3b82f6'}
-              >
-                <BarChart3 className="w-5 h-5" />
-                <span>Анализировать</span>
-              </button>
+            {isTranscribing && (
+              <div className="flex items-center gap-2 text-purple-600">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-purple-600"></div>
+                <span>Транскрибация аудио...</span>
+              </div>
             )}
 
-            {isAnalyzing && (
+            {isAnalyzing && !isTranscribing && (
               <div className="flex items-center gap-2 text-blue-600">
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-600"></div>
-                <span>Анализ...</span>
+                <span>Анализ дикции...</span>
               </div>
             )}
           </div>
@@ -412,6 +484,14 @@ export function DictationAnalysis({ onBack }: DictationAnalysisProps) {
           {/* Результаты анализа */}
           {analysis && (
             <div className="space-y-6">
+              {/* Транскрибированный текст */}
+              {analysis.transcribedText && (
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-purple-900 mb-3">Распознанный текст:</h3>
+                  <p className="text-xl text-gray-800 font-medium">{analysis.transcribedText}</p>
+                </div>
+              )}
+
               {/* Общая точность */}
               <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-6">
                 <div className="flex items-center justify-between">

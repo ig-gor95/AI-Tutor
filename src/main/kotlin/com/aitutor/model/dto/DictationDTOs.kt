@@ -144,6 +144,9 @@ data class DictationAnalysisResponse(
     @JsonProperty("overallAccuracy")
     val overallAccuracy: Double, // Общая точность (0.0 - 1.0)
     
+    @JsonProperty("transcribedText")
+    val transcribedText: String, // Транскрибированный текст из аудио
+    
     @JsonProperty("words")
     val words: List<WordAnalysis>, // Анализ по словам
     

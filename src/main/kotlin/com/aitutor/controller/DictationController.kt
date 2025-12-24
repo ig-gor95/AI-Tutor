@@ -1,7 +1,10 @@
 package com.aitutor.controller
 
+import com.aitutor.model.dto.ArticulationAnalysis
 import com.aitutor.model.dto.DictationAnalysisRequest
 import com.aitutor.model.dto.DictationAnalysisResponse
+import com.aitutor.model.dto.IntonationAnalysis
+import com.aitutor.model.dto.TimbreAnalysis
 import com.aitutor.service.DictationAnalysisService
 import kotlinx.coroutines.runBlocking
 import org.springframework.http.HttpStatus
@@ -62,7 +65,7 @@ class DictationController(
                     overallAccuracy = 0.0,
                     words = emptyList(),
                     phonemes = emptyList(),
-                    intonation = com.aitutor.model.dto.IntonationAnalysis(
+                    intonation = IntonationAnalysis(
                         pitchContour = emptyList(),
                         pitchVariation = 0.0,
                         averagePitch = 0.0,
@@ -70,14 +73,14 @@ class DictationController(
                         monotonyScore = 0.0,
                         intonationPattern = null
                     ),
-                    timbre = com.aitutor.model.dto.TimbreAnalysis(
+                    timbre = TimbreAnalysis(
                         spectralCentroid = 0.0,
                         spectralRolloff = 0.0,
                         zeroCrossingRate = 0.0,
                         mfcc = emptyList(),
                         harmonicity = null
                     ),
-                    articulation = com.aitutor.model.dto.ArticulationAnalysis(
+                    articulation = ArticulationAnalysis(
                         clarity = 0.0,
                         consonantAccuracy = 0.0,
                         vowelAccuracy = 0.0,
@@ -87,7 +90,8 @@ class DictationController(
                     audioDuration = 0.0,
                     sampleRate = 0,
                     issues = listOf("Error: ${e.message}"),
-                    recommendations = emptyList()
+                    recommendations = emptyList(),
+                    transcribedText = ""
                 ))
         }
     }
@@ -116,7 +120,7 @@ class DictationController(
                     overallAccuracy = 0.0,
                     words = emptyList(),
                     phonemes = emptyList(),
-                    intonation = com.aitutor.model.dto.IntonationAnalysis(
+                    intonation = IntonationAnalysis(
                         pitchContour = emptyList(),
                         pitchVariation = 0.0,
                         averagePitch = 0.0,
@@ -124,14 +128,14 @@ class DictationController(
                         monotonyScore = 0.0,
                         intonationPattern = null
                     ),
-                    timbre = com.aitutor.model.dto.TimbreAnalysis(
+                    timbre = TimbreAnalysis(
                         spectralCentroid = 0.0,
                         spectralRolloff = 0.0,
                         zeroCrossingRate = 0.0,
                         mfcc = emptyList(),
                         harmonicity = null
                     ),
-                    articulation = com.aitutor.model.dto.ArticulationAnalysis(
+                    articulation = ArticulationAnalysis(
                         clarity = 0.0,
                         consonantAccuracy = 0.0,
                         vowelAccuracy = 0.0,
@@ -145,7 +149,8 @@ class DictationController(
                         "Please ensure the Python phonetics service is running.",
                         "Start it with: cd phonetics-service && ./start.sh",
                         "Check service health at: http://localhost:8041/health"
-                    )
+                    ),
+                    transcribedText = ""
                 ))
         } catch (e: Exception) {
             ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -154,7 +159,7 @@ class DictationController(
                     overallAccuracy = 0.0,
                     words = emptyList(),
                     phonemes = emptyList(),
-                    intonation = com.aitutor.model.dto.IntonationAnalysis(
+                    intonation = IntonationAnalysis(
                         pitchContour = emptyList(),
                         pitchVariation = 0.0,
                         averagePitch = 0.0,
@@ -162,14 +167,14 @@ class DictationController(
                         monotonyScore = 0.0,
                         intonationPattern = null
                     ),
-                    timbre = com.aitutor.model.dto.TimbreAnalysis(
+                    timbre = TimbreAnalysis(
                         spectralCentroid = 0.0,
                         spectralRolloff = 0.0,
                         zeroCrossingRate = 0.0,
                         mfcc = emptyList(),
                         harmonicity = null
                     ),
-                    articulation = com.aitutor.model.dto.ArticulationAnalysis(
+                    articulation = ArticulationAnalysis(
                         clarity = 0.0,
                         consonantAccuracy = 0.0,
                         vowelAccuracy = 0.0,
@@ -179,7 +184,8 @@ class DictationController(
                     audioDuration = 0.0,
                     sampleRate = 0,
                     issues = listOf("Error: ${e.message}"),
-                    recommendations = emptyList()
+                    recommendations = emptyList(),
+                    transcribedText = ""
                 ))
         }
     }

@@ -20,7 +20,8 @@ private val logger = KotlinLogging.logger {}
 class DictationAnalysisService(
     private val phoneticAnalyzer: RussianPhoneticAnalyzer,
     private val praatFormantService: PraatFormantService,
-    private val phonemeConfig: PhonemeConfig
+    private val phonemeConfig: PhonemeConfig,
+    private val openAIService: OpenAIService
 ) {
 
     /**
@@ -114,6 +115,25 @@ class DictationAnalysisService(
             
             logger.info { "Analyzing dictation: ${audioData.size} samples, ${duration}s duration, ${sampleRate}Hz sample rate, readTime=${String.format("%.2f", readTime)}ms" }
             
+            // Транскрибируем аудио в текст
+            val transcriptionStartTime = System.nanoTime()
+            logger.info { "Transcribing audio to text..." }
+            val transcribedText = try {
+                openAIService.transcribeAudio(audioBytes, request.audioFormat, request.language)
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to transcribe audio: ${e.message}" }
+                // Если expectedText пустой или является заглушкой, бросаем исключение
+                if (request.expectedText.isBlank()) {
+                    throw RuntimeException("Не удалось транскрибировать аудио через OpenAI: ${e.message}. " +
+                        "Проверьте настройки OpenAI API key и подключение к интернету.", e)
+                }
+                // Используем ожидаемый текст как fallback только если он непустой
+                logger.warn { "Using expected text as fallback: '${request.expectedText}'" }
+                request.expectedText
+            }
+            val transcriptionTime = (System.nanoTime() - transcriptionStartTime) / 1_000_000.0
+            logger.info { "Audio transcription completed: '$transcribedText', time=${String.format("%.2f", transcriptionTime)}ms" }
+            
             // Выполняем различные анализы
             // ВРЕМЕННО ОТКЛЮЧЕНО: анализ интонации и тембра занимает слишком много времени
             // TODO: Оптимизировать или включить обратно после оптимизации
@@ -141,7 +161,8 @@ class DictationAnalysisService(
             logger.info { "Timbre analysis (disabled): time=${String.format("%.2f", timbreTime)}ms" }
             
             val phoneticsStartTime = System.nanoTime()
-            val (words, phonemes) = analyzePhonetics(audioData, sampleRate, request.expectedText, request.language)
+            // Используем транскрибированный текст для анализа дикции
+            val (words, phonemes) = analyzePhonetics(audioData, sampleRate, transcribedText, request.language)
             val phoneticsTime = (System.nanoTime() - phoneticsStartTime) / 1_000_000.0
             logger.info { "Phonetics analysis completed: ${phonemes.size} phonemes, ${words.size} words, time=${String.format("%.2f", phoneticsTime)}ms" }
             
@@ -172,10 +193,13 @@ class DictationAnalysisService(
             val totalTime = (System.nanoTime() - totalStartTime) / 1_000_000.0
             logger.info { 
                 "=== Dictation Analysis Summary ===\n" +
+                "Transcribed text: '$transcribedText'\n" +
+                "Expected text: '${request.expectedText}'\n" +
                 "Total time: ${String.format("%.2f", totalTime)}ms\n" +
                 "  - Base64 decode: ${String.format("%.2f", decodeTime)}ms\n" +
                 "  - Audio format: ${String.format("%.2f", formatTime)}ms\n" +
                 "  - Read audio data: ${String.format("%.2f", readTime)}ms\n" +
+                "  - Audio transcription: ${String.format("%.2f", transcriptionTime)}ms\n" +
                 "  - Intonation analysis: ${String.format("%.2f", intonationTime)}ms\n" +
                 "  - Timbre analysis: ${String.format("%.2f", timbreTime)}ms\n" +
                 "  - Phonetics analysis: ${String.format("%.2f", phoneticsTime)}ms (${phonemes.size} phonemes)\n" +
@@ -187,6 +211,7 @@ class DictationAnalysisService(
             DictationAnalysisResponse(
                 success = true,
                 overallAccuracy = overallAccuracy,
+                transcribedText = transcribedText,
                 words = words,
                 phonemes = phonemes,
                 intonation = intonation,
